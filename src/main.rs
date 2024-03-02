@@ -1,85 +1,24 @@
-pub mod datastore;
-pub mod durability; 
-use durability::{omnipaxos_durability, OmniLogEntry, OmniPaxosDurability};
+use durability::{OmniLogEntry, OmniPaxosDurability};
 pub use omnipaxos_durability::*;
 pub use std::sync::mpsc::channel;
-pub mod node;
-use node::{Node, NodeRunner};
-use omnipaxos::{messages::Message, util::NodeId, *};
+use node::{Node, NodeRunner, BUFFER_SIZE, ELECTION_TICK_TIMEOUT};
+use omnipaxos::{messages::Message, util::NodeId};
 use omnipaxos_storage::memory_storage::MemoryStorage;
-use std::{collections::HashMap, sync::{Arc, Mutex}};
-use tokio::{self, runtime::{ Builder, Runtime }, sync::mpsc};
-const SERVERS: [NodeId; 2] = [1, 2];
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+use tokio::{runtime::Builder, sync::mpsc,};
 
-type OmniPaxosKV = OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>;
+pub mod datastore;
+pub mod durability;
+pub mod node;
+pub mod utils;
 
-fn main() {
-    let server_config = ServerConfig {
-        pid: 1,
-        election_tick_timeout: 5,
-        ..Default::default()
-    };
-    let server_config_2 = ServerConfig {
-        pid: 2,
-        election_tick_timeout: 5,
-        ..Default::default()
-    };
-    let cluster_config = ClusterConfig {
-        configuration_id: 1,
-        nodes: vec![1,2],// PIDS of all nodes
-        ..Default::default()
-    };
-    let op_config = OmniPaxosConfig {
-        server_config,
-        cluster_config: cluster_config.clone(),
-    };
-    let op_config_2 = OmniPaxosConfig {
-        server_config: server_config_2,
-        cluster_config,
-    };
-    let  storage:MemoryStorage<OmniLogEntry> = MemoryStorage::default();
-    let omni_paxos = op_config
-        .build(storage.clone())
-        .expect("failed to build OmniPaxos");
-    let omni_paxos_2 = op_config_2
-    .build(storage)
-    .expect("failed to build OmniPaxos");
-    let mut node: Node = Node::new(1, OmniPaxosDurability::new(omni_paxos));
-    let mut node_2: Node = Node::new(2, OmniPaxosDurability::new(omni_paxos_2));
-    
-    let  (sending_channels, mut receiver_channels) = initialise_channels();
-    
-
-    let mut  node_runner = NodeRunner {
-        node: Arc::new(Mutex::new(node)),
-        incoming: receiver_channels.remove(&1).unwrap(),
-        outgoing: sending_channels.clone(),
-    };
-    let mut  node_runner_2 = NodeRunner {
-        node: Arc::new(Mutex::new(node_2)),
-        incoming: receiver_channels.remove(&2).unwrap(),
-        outgoing: sending_channels.clone(),
-    };
-    let runtime= create_runtime();
-    runtime.spawn(async move{
-    _ = node_runner.run().await;
-    });
-    runtime.spawn(async move{
-        _ = node_runner_2.run().await;
-        });
-
-}
-fn create_runtime() -> Runtime {
-    Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-        .unwrap()
-}
-
+const SERVERS: [NodeId; 3] = [1, 2, 3];
 
 #[allow(clippy::type_complexity)]
-fn initialise_channels() -> (
+fn initialize_channels() -> (
     HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
     HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>,
 ) {
@@ -87,9 +26,52 @@ fn initialise_channels() -> (
     let mut receiver_channels = HashMap::new();
 
     for pid in SERVERS {
-        let (sender, receiver) = mpsc::channel(4);
+        let (sender, receiver) = mpsc::channel(BUFFER_SIZE);
         sender_channels.insert(pid, sender);
         receiver_channels.insert(pid, receiver);
     }
     (sender_channels, receiver_channels)
+}
+
+fn main() {
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let configuration_id = 1;
+    let mut op_server_handles = HashMap::new();
+    let (sender_channels, mut receiver_channels) = initialize_channels();
+
+    for pid in SERVERS {
+        let server_config = ServerConfig {
+            pid,
+            election_tick_timeout: ELECTION_TICK_TIMEOUT,
+            ..Default::default()
+        };
+        let cluster_config = ClusterConfig {
+            configuration_id,
+            nodes: SERVERS.into(),
+            ..Default::default()
+        };
+        let op_config = OmniPaxosConfig {
+            server_config,
+            cluster_config,
+        };
+        let storage: MemoryStorage<OmniLogEntry> = MemoryStorage::default();
+        let omni_paxos: Arc<Mutex<OmniPaxosDurability>> = Arc::new(Mutex::new(op_config.build(storage).unwrap()));
+        let mut node: Node = Node::new(pid, omni_paxos);
+        let mut node_runner: NodeRunner = NodeRunner {
+            node: Arc::new(Mutex::new(node)),
+            incoming: receiver_channels.remove(&pid).unwrap(),
+            outgoing: sending_channels.clone(),
+        };
+    };
+    runtime.spawn({
+        async move {
+            node_runner.run().await;
+        }
+    });
+
 }
