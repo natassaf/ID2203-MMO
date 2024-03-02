@@ -2,27 +2,58 @@ use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
 use crate::datastore::{self, *};
-use crate::durability::omnipaxos_durability::OmniPaxosDurability;
-use crate::durability::{DurabilityLayer, DurabilityLevel};
+use crate::durability::omnipaxos_durability::{self, OmniPaxosDurability};
+use crate::durability::{DurabilityLayer, DurabilityLevel, OmniLogEntry};
 use omnipaxos::messages::*;
 use omnipaxos::util::NodeId;
+use tokio::time;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use std::time::Duration;
 
+pub const BUFFER_SIZE: usize = 10000;
+pub const ELECTION_TICK_TIMEOUT: u64 = 5;
+pub const TICK_PERIOD: Duration = Duration::from_millis(10);
+pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(1);
+
+pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
+pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
+    pub incoming: mpsc::Receiver<Message<OmniLogEntry>>,
+    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>
     // TODO Messaging and running
 }
 
 impl NodeRunner {
     async fn send_outgoing_msgs(&mut self) {
-        todo!()
+        let messages = self.node.lock().unwrap().omni_paxos_durability.omnipaxos.outgoing_messages();
+        for msg in messages {
+            let receiver = msg.get_receiver();
+            let channel = self
+                .outgoing
+                .get_mut(&receiver)
+                .expect("No channel for receiver");
+            let _ = channel.send(msg).await;
+        }
     }
 
-    pub async fn run(&mut self) {
-        todo!()
+    pub(crate) async fn run(&mut self) {
+        let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
+        let mut tick_interval = time::interval(TICK_PERIOD);
+        loop {
+            tokio::select! {
+                biased;
+
+                _ = tick_interval.tick() => { self.node.lock().unwrap().omni_paxos_durability.omnipaxos.tick(); },
+                _ = outgoing_interval.tick() => { self.send_outgoing_msgs().await; },
+                Some(in_msg) = self.incoming.recv() => {self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(in_msg); },
+                else => { }
+            }
+        }
     }
+
 }
 
 pub struct Node {
@@ -137,8 +168,8 @@ mod tests {
 
     #[allow(clippy::type_complexity)]
     fn initialise_channels() -> (
-        HashMap<NodeId, mpsc::Sender<Message<_>>>,
-        HashMap<NodeId, mpsc::Receiver<Message<_>>>,
+        HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
+        HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>,
     ) {
         todo!()
     }
