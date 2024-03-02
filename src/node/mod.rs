@@ -21,9 +21,9 @@ pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
 pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
+    // TODO Messaging and running
     pub incoming: mpsc::Receiver<Message<OmniLogEntry>>,
     pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>
-    // TODO Messaging and running
 }
 
 impl NodeRunner {
@@ -68,13 +68,12 @@ impl Node {
     pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability) -> Self {
         return Node{
             node_id: node_id,
+            // TODO Datastore and OmniPaxosDurability
             omni_paxos_durability:omni_durability,
             datastore: ExampleDatastore::new(),
             leader_id: None,
             latest_decided_idx:0
-            // TODO Datastore and OmniPaxosDurability
-        };  
-        //todo!()
+        };
     }
 
     /// update who is the current leader. If a follower becomes the leader,
