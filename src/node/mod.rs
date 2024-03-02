@@ -29,8 +29,8 @@ pub struct Node {
     node_id: NodeId, // Unique identifier for the node
     omni_paxos_durability: OmniPaxosDurability,
     datastore: ExampleDatastore,
-    leader_id: Option<NodeId> // Unique identifier for the node that is the leader
-
+    leader_id: Option<NodeId> ,// Unique identifier for the node that is the leader
+    latest_decided_idx: usize // Index of the latest decided log entry
 }
 
 impl Node {
@@ -39,7 +39,8 @@ impl Node {
             node_id: node_id,
             omni_paxos_durability:omni_durability,
             datastore: ExampleDatastore::new(),
-            leader_id: None
+            leader_id: None,
+            latest_decided_idx:0
             // TODO Datastore and OmniPaxosDurability
         };  
         //todo!()
