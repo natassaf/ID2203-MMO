@@ -43,6 +43,10 @@ pub struct OmniPaxosDurability {
 
 impl OmniPaxosDurability{
 
+    pub fn new(omnipaxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>)->Self{
+        OmniPaxosDurability{omnipaxos}
+    }
+    
     fn decode_log_entry_decided(log_entry:utilLogEntry<OmniLogEntry>)-> Option<(TxOffset, TxData)>{
         match log_entry {
             utilLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
