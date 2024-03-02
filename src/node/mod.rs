@@ -27,12 +27,22 @@ impl NodeRunner {
 
 pub struct Node {
     node_id: NodeId, // Unique identifier for the node
-                     // TODO Datastore and OmniPaxosDurability
+    omni_paxos_durability: OmniPaxosDurability,
+    datastore: ExampleDatastore,
+    leader_id: Option<NodeId> // Unique identifier for the node that is the leader
+
 }
 
 impl Node {
     pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability) -> Self {
-        todo!()
+        return Node{
+            node_id: node_id,
+            omni_paxos_durability:omni_durability,
+            datastore: ExampleDatastore::new(),
+            leader_id: None
+            // TODO Datastore and OmniPaxosDurability
+        };  
+        //todo!()
     }
 
     /// update who is the current leader. If a follower becomes the leader,
@@ -40,7 +50,15 @@ impl Node {
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
-        todo!()
+    
+        current_leader =  self.omni_paxos_durability.O();
+        if current_leader == Some(self.node_id) {
+                // TODO: apply unapplied txns to the datastore
+        }else if current_leader  != Some(self.node_id) && self.leader_id == self.node_id {
+                //TODO: rollback the txns committed in memory that have not been replicated yet
+        }
+        self.leader_id = Some(current_leader.unwrap());
+        todo!();
     }
 
     /// Apply the transactions that have been decided in OmniPaxos to the Datastore.

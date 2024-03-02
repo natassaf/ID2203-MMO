@@ -3,7 +3,7 @@ use super::*;
 /// OmniPaxosDurability is a OmniPaxos node that should provide the replicated
 /// implementation of the DurabilityLayer trait required by the Datastore.
 pub struct OmniPaxosDurability {
-    // TODO
+
 }
 
 impl DurabilityLayer for OmniPaxosDurability {
