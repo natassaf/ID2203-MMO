@@ -41,15 +41,22 @@ pub struct OmniPaxosDurability {
     pub omnipaxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>
 }
 
+impl OmniPaxosDurability{
+
+    fn decode_log_entry_decided(log_entry:utilLogEntry<OmniLogEntry>)-> Option<(TxOffset, TxData)>{
+        match log_entry {
+            utilLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
+            _ => None,
+        }
+    }
+} 
+
 impl DurabilityLayer for OmniPaxosDurability {
     fn iter(&self) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
         // iterate over the decided log entries
         let log_iter = self.omnipaxos.read_entries(0..self.omnipaxos.get_decided_idx());
         let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
-            match log_entry {
-                utilLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
-                _ => None,
-            }
+            Self::decode_log_entry_decided(log_entry.clone())
         }).collect();
 
         Box::new(decided_entries.into_iter())
@@ -59,7 +66,15 @@ impl DurabilityLayer for OmniPaxosDurability {
         &self,
         offset: TxOffset,
     ) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        todo!()
+        let entries_after_offset = match self.omnipaxos.read_decided_suffix(offset.0){
+            Some(entries)=>entries.clone(),
+            None=>vec![]
+        };
+        let decided_entries: Vec<(TxOffset, TxData)> = entries_after_offset.iter().filter_map(|log_entry| {
+            Self::decode_log_entry_decided(log_entry.clone())
+        }).collect();
+
+        Box::new(decided_entries.into_iter())    
     }
 
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
@@ -71,6 +86,10 @@ impl DurabilityLayer for OmniPaxosDurability {
     }
 
     fn get_durable_tx_offset(&self) -> TxOffset {
-        todo!()
+        self
+        .iter()
+        .last()
+        .map(|(tx_offset, _)| tx_offset)
+        .unwrap_or(TxOffset(0))
     }
 }
