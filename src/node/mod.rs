@@ -29,7 +29,7 @@ pub struct Node {
     node_id: NodeId, // Unique identifier for the node
     omni_paxos_durability: OmniPaxosDurability,
     datastore: ExampleDatastore,
-    leader_id: NodeId // Unique identifier for the node that is the leader
+    leader_id: Option<NodeId> // Unique identifier for the node that is the leader
 
 }
 
@@ -39,7 +39,7 @@ impl Node {
             node_id: node_id,
             omni_paxos_durability:omni_durability,
             datastore: ExampleDatastore::new(),
-            leader_id: node_id
+            leader_id: None
             // TODO Datastore and OmniPaxosDurability
         };  
         //todo!()
@@ -51,20 +51,23 @@ impl Node {
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
     
-        let current_leader =  self.omni_paxos_durability.omnipaxos.get_current_leader();
-        match current_leader{
-            Some(leader) => {
-                if leader == self.node_id{
-                               // TODO: apply unapplied txns to the datastore 
-                }else if self.leader_id == self.node_id{
-                //TODO: rollback the txns committed in memory that have not been replicated yet
+        let current_leader =  self.omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
+        
+        if current_leader == self.node_id {
+            // TODO: apply unapplied txns to the datastore 
+            self.leader_id = Some(current_leader);
 
-                }
-            },
-            None=> {},
+            return; 
         }
-        self.leader_id = current_leader;
-        todo!();
+        let previous_leader = match self.leader_id{
+            Some(l)=>l,
+            None=> {self.leader_id = Some(current_leader); return} 
+        };
+
+        if previous_leader == self.node_id{
+                //TODO: rollback the txns committed in memory that have not been replicated yet
+                self.leader_id = Some(current_leader);
+        }
     }
 
     /// Apply the transactions that have been decided in OmniPaxos to the Datastore.

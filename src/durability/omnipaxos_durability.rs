@@ -43,6 +43,7 @@ pub struct OmniPaxosDurability {
 
 impl DurabilityLayer for OmniPaxosDurability {
     fn iter(&self) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
+        // iterate over the decided log entries
         let log_iter = self.omnipaxos.read_entries(0..self.omnipaxos.get_decided_idx());
         let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
             match log_entry {
