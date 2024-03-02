@@ -1,7 +1,7 @@
 use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
-use crate::datastore::*;
+use crate::datastore::{self, *};
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::{DurabilityLayer, DurabilityLevel};
 use omnipaxos::messages::*;
@@ -29,8 +29,8 @@ pub struct Node {
     node_id: NodeId, // Unique identifier for the node
     omni_paxos_durability: OmniPaxosDurability,
     datastore: ExampleDatastore,
-    leader_id: Option<NodeId> // Unique identifier for the node that is the leader
-
+    leader_id: Option<NodeId> ,// Unique identifier for the node that is the leader
+    latest_decided_idx: usize // Index of the latest decided log entry
 }
 
 impl Node {
@@ -39,7 +39,8 @@ impl Node {
             node_id: node_id,
             omni_paxos_durability:omni_durability,
             datastore: ExampleDatastore::new(),
-            leader_id: None
+            leader_id: None,
+            latest_decided_idx:0
             // TODO Datastore and OmniPaxosDurability
         };  
         //todo!()
@@ -92,6 +93,7 @@ impl Node {
     pub fn begin_mut_tx(
         &self,
     ) -> Result<<ExampleDatastore as Datastore<String, String>>::MutTx, DatastoreError> {
+    
         todo!()
     }
 
@@ -100,7 +102,9 @@ impl Node {
         &mut self,
         tx: <ExampleDatastore as Datastore<String, String>>::MutTx,
     ) -> Result<TxResult, DatastoreError> {
+        
         todo!()
+    
     }
 
     fn advance_replicated_durability_offset(
@@ -148,7 +152,7 @@ mod tests {
     }
 
     fn spawn_nodes(runtime: &mut Runtime) -> HashMap<NodeId, (Arc<Mutex<Node>>, JoinHandle<()>)> {
-        let mut nodes = HashMap::new();
+        let mut nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = HashMap::new();
         let (sender_channels, mut receiver_channels) = initialise_channels();
         for pid in SERVERS {
             todo!("spawn the nodes")
