@@ -94,6 +94,8 @@ impl ExampleDurabilityLayer {
     }
 }
 
+
+
 impl DurabilityLayer for ExampleDurabilityLayer {
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
         // This is where the durability layer would append the transaction to the log.
