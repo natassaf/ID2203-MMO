@@ -177,14 +177,6 @@ impl Node {
     }
 }
 
-/// Your test cases should spawn up multiple nodes in tokio and cover the following:
-/// 1. Find the leader and commit a transaction. Show that the transaction is really *chosen* (according to our definition in Paxos) among the nodes.
-/// 2. Find the leader and commit a transaction. Kill the leader and show that another node will be elected and that the replicated state is still correct.
-/// 3. Find the leader and commit a transaction. Disconnect the leader from the other nodes and continue to commit transactions before the OmniPaxos election timeout.
-/// Verify that the transaction was first committed in memory but later rolled back.
-/// 4. Simulate the 3 partial connectivity scenarios from the OmniPaxos liveness lecture. Does the system recover? *NOTE* for this test you may need to modify the messaging logic.
-///
-/// A few helper functions to help structure your tests have been defined that you are welcome to use.
 #[cfg(test)]
 mod tests {
     use crate::node::*;
@@ -203,7 +195,8 @@ mod tests {
         HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
         HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>,
     ) {
-        todo!()
+        // TODO: Implement channel initialization
+        unimplemented!()
     }
 
     fn create_runtime() -> Runtime {
@@ -218,8 +211,49 @@ mod tests {
         let mut nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = HashMap::new();
         let (sender_channels, mut receiver_channels) = initialise_channels();
         for pid in SERVERS {
-            todo!("spawn the nodes")
+            // TODO: Spawn the nodes
+            unimplemented!()
         }
         nodes
+    }
+
+    #[tokio::test]
+    async fn test_find_leader_and_commit_transaction() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // TODO: Implement the test case
+
+        runtime.shutdown_background();
+    }
+
+    #[tokio::test]
+    async fn test_kill_leader_and_elect_new_leader() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // TODO: Implement the test case
+
+        runtime.shutdown_background();
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_leader_and_rollback_transactions() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // TODO: Implement the test case
+
+        runtime.shutdown_background();
+    }
+
+    #[tokio::test]
+    async fn test_partial_connectivity_scenarios() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // TODO: Implement the test case
+
+        runtime.shutdown_background();
     }
 }
