@@ -1,19 +1,17 @@
 use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
+use crate::datastore::Datastore;
+use crate::datastore::TxOffset;
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::omnipaxos_durability::OmniLogEntry;
 use crate::durability::{DurabilityLayer, DurabilityLevel};
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::io::Read;
-use std::ops::Index;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use crate::datastore::{self, *};
-use omnipaxos::{messages::*, OmniPaxos};
-use omnipaxos::util::{LogEntry, NodeId};
-use std::borrow::Borrow;
+use omnipaxos::messages::Message;
+use omnipaxos::util::NodeId;
 use tokio::{sync::mpsc, time};
 
 pub const BUFFER_SIZE: usize = 10000;
@@ -115,11 +113,11 @@ impl Node {
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
         let mut idx = self.latest_decided_idx;
-        let mut iddex: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
+        let iddex: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if idx < iddex {
             let entries = self.omni_paxos_durability.iter_starting_from_offset(TxOffset(idx));
             for (txOffset, txData) in entries {
-                let mut tx = self.datastore.begin_mut_tx();
+                let mut tx = self.begin_mut_tx().unwrap();
                 // Create a mutable vector to act as a buffer
                 let mut buffer = Vec::new();
 
