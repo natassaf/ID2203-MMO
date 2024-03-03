@@ -70,7 +70,10 @@ fn main() {
     });
 
     let handles: Vec<tokio::task::JoinHandle<()>> = node_runners.into_iter().map(|mut node_runner| {
-        runtime.spawn(node_runner.run())
+        runtime.spawn(async move {
+            node_runner.run().await; // Use tmp_node_runner in the spawned task
+        })
     }).collect::<Vec<_>>();
+    
     
 }
