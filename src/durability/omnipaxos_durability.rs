@@ -1,14 +1,13 @@
-use crate::datastore::tx_data;
 
 use super::*;
 use omnipaxos::{macros::Entry, OmniPaxos};
 use omnipaxos_storage::memory_storage::MemoryStorage;
 use omnipaxos::util::LogEntry as utilLogEntry;
-use std::{
-    fs::File,
-    io::{Read, Write},
-    sync::{Arc, Mutex},
-};
+// use std::{
+//     fs::File,
+//     io::{Read, Write},
+//     sync::{Arc, Mutex},
+// };
 
 #[derive(Entry, Clone, Debug)]
 pub struct OmniLogEntry {
@@ -21,18 +20,18 @@ impl OmniLogEntry {
         OmniLogEntry{tx_offset, tx_data}
     }
 
-    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&self.tx_offset.0.to_le_bytes())?;
-        self.tx_data.serialize(writer)
-    }
+    // fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+    //     writer.write_all(&self.tx_offset.0.to_le_bytes())?;
+    //     self.tx_data.serialize(writer)
+    // }
 
-    fn deserialize<R: Read>(reader: &mut R) -> std::io::Result<Self> {
-        let mut bytes = [0; 8];
-        reader.read_exact(&mut bytes)?;
-        let tx_offset = TxOffset(u64::from_le_bytes(bytes));
-        let tx_data = TxData::deserialize(reader)?;
-        Ok(OmniLogEntry { tx_offset, tx_data })
-    }
+    // fn deserialize<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+    //     let mut bytes = [0; 8];
+    //     reader.read_exact(&mut bytes)?;
+    //     let tx_offset = TxOffset(u64::from_le_bytes(bytes));
+    //     let tx_data = TxData::deserialize(reader)?;
+    //     Ok(OmniLogEntry { tx_offset, tx_data })
+    // }
 }
 
 /// OmniPaxosDurability is a OmniPaxos node that should provide the replicated

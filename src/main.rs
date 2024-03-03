@@ -61,8 +61,8 @@ async fn main() {
         let storage: MemoryStorage<OmniLogEntry> = MemoryStorage::default();
         let omnipaxos = omnipaxos_config.build( storage).unwrap();
         let omnipaxos_durability = OmniPaxosDurability::new(omnipaxos);
-        let mut node: Node = Node::new(pid, omnipaxos_durability);
-        let mut node_runner: NodeRunner = NodeRunner {
+        let  node: Node = Node::new(pid, omnipaxos_durability);
+        let  node_runner: NodeRunner = NodeRunner {
             node: Arc::new(Mutex::new(node)),
             incoming: receiver_channels.remove(&pid).unwrap(),
             outgoing: sender_channels.clone(),
