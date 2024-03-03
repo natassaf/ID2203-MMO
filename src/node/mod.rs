@@ -53,11 +53,13 @@ impl NodeRunner {
                 biased;
                 _ = tick_interval.tick() => {
                     self.node.lock().unwrap().update_leader();
-                    self.send_outgoing_msgs().await;
-                }
+                },
+                _ = outgoing_interval.tick() => { 
+                    self.send_outgoing_msgs().await; 
+                },
                 Some(msg) = self.incoming.recv() => {
                     self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_message(msg);
-                }
+                },
             }
         }
     }
