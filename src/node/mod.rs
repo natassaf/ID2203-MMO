@@ -54,6 +54,7 @@ impl NodeRunner {
             tokio::select! {
                 biased;
                 _ = tick_interval.tick() => {
+                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.tick();
                     self.node.lock().unwrap().update_leader();
                 },
                 _ = outgoing_interval.tick() => { 
@@ -90,7 +91,6 @@ impl Node {
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
-        self.omni_paxos_durability.omnipaxos.tick();
         let leader_id = self.omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
         if leader_id == self.node_id {
             self.apply_replicated_txns();
