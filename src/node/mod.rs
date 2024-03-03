@@ -56,7 +56,7 @@ impl NodeRunner {
                     self.send_outgoing_msgs().await;
                 }
                 Some(msg) = self.incoming.recv() => {
-                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_message(msg);
+                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
                 }
             }
         }
