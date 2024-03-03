@@ -1,19 +1,17 @@
 use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
+use crate::datastore::Datastore;
+use crate::datastore::TxOffset;
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::omnipaxos_durability::OmniLogEntry;
 use crate::durability::{DurabilityLayer, DurabilityLevel};
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::io::Read;
-use std::ops::Index;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use crate::datastore::{self, *};
-use omnipaxos::{messages::*, OmniPaxos};
-use omnipaxos::util::{LogEntry, NodeId};
-use std::borrow::Borrow;
+use omnipaxos::messages::Message;
+use omnipaxos::util::NodeId;
 use tokio::{sync::mpsc, time};
 
 pub const BUFFER_SIZE: usize = 10000;
