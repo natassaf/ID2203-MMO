@@ -97,7 +97,7 @@ impl Node {
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
         // TODO
-        let leader_id = self.omni_paxos_durability.omnipaxos.get_leader();
+        let leader_id = self.omni_paxos_durability.omnipaxos.get_current_leader();
         if leader_id.is_some() && leader_id.unwrap() != self.node_id {
             self.leader_id = leader_id;
         } else {
