@@ -94,12 +94,17 @@ impl Node {
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
-        // TODO
         let leader_id = self.omni_paxos_durability.omnipaxos.get_current_leader();
         if leader_id.is_some() && leader_id.unwrap() != self.node_id {
             self.leader_id = leader_id;
         } else {
             self.leader_id = None;
+        }
+
+        if self.leader_id.is_some() {
+            self.apply_replicated_txns();
+        } else {
+            self.rollback_unreplicated_txns();
         }
     }
 
@@ -107,11 +112,10 @@ impl Node {
     /// We need to be careful with which nodes should do this according to desired
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
-        // TODO
         let mut idx = self.latest_decided_idx;
         let iddex: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if idx < iddex {
-            let entries =self.omni_paxos_durability.iter_starting_from_offset(TxOffset( idx));
+            let entries = self.omni_paxos_durability.iter_starting_from_offset(TxOffset(idx));
             for (txOffset, txData) in entries {
                 let mut tx = self.begin_mut_tx().unwrap();
                 // Create a mutable vector to act as a buffer
@@ -120,8 +124,8 @@ impl Node {
                 // Convert the buffer into a Write type (Cursor)
                 let mut cursor = Cursor::new(&mut buffer);
                 txData.serialize(&mut cursor);
-                let value = String::from_utf8(buffer).unwrap();      
-                tx.set(txOffset.0.to_string(), value);    
+                let value = String::from_utf8(buffer).unwrap();
+                tx.set(txOffset.0.to_string(), value);
                 idx += 1;
             }
         }
@@ -132,12 +136,10 @@ impl Node {
         &self,
         durability_level: DurabilityLevel,
     ) -> <ExampleDatastore as Datastore<String, String>>::Tx {
-        // TODO
         self.datastore.begin_tx(durability_level)
     }
 
     pub fn release_tx(&self, tx: <ExampleDatastore as Datastore<String, String>>::Tx) {
-        // TODO
         self.datastore.release_tx(tx)
     }
 
@@ -145,7 +147,6 @@ impl Node {
     pub fn begin_mut_tx(
         &self,
     ) -> Result<<ExampleDatastore as Datastore<String, String>>::MutTx, DatastoreError> {
-        // TODO
         Ok(self.datastore.begin_mut_tx())
     }
 
@@ -154,18 +155,27 @@ impl Node {
         &mut self,
         tx: <ExampleDatastore as Datastore<String, String>>::MutTx,
     ) -> Result<TxResult, DatastoreError> {
-        // TODO
         self.datastore.commit_mut_tx(tx)
     }
 
     fn advance_replicated_durability_offset(
         &self,
     ) -> Result<(), crate::datastore::error::DatastoreError> {
-        // TODO
-        let result=self.datastore.get_replicated_offset();
-        match result{
-            Some(offset)=> self.datastore.advance_replicated_durability_offset(offset),
-            None=> Err(DatastoreError::ReplicatedOffsetNotAvailable)
+        let result = self.datastore.get_replicated_offset();
+        match result {
+            Some(offset) => self.datastore.advance_replicated_durability_offset(offset),
+            None => Err(DatastoreError::ReplicatedOffsetNotAvailable),
+        }
+    }
+    
+    fn rollback_unreplicated_txns(&mut self) {
+        let current_idx = self.omni_paxos_durability.omnipaxos.get_current_idx();
+        let committed_idx = self.latest_decided_idx;
+        if current_idx < committed_idx {
+            let entries = self.omni_paxos_durability.iter_starting_from_offset(TxOffset(current_idx));
+            for (txOffset, _) in entries {
+                self.datastore.rollback_tx(txOffset.0.to_string());
+            }
         }
     }
 }
