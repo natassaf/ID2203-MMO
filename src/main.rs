@@ -32,7 +32,8 @@ fn initialize_channels() -> (
     (sender_channels, receiver_channels)
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let runtime = Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -69,11 +70,15 @@ fn main() {
         node_runner
     });
 
+
     let handles: Vec<tokio::task::JoinHandle<()>> = node_runners.into_iter().map(|mut node_runner| {
         runtime.spawn(async move {
             node_runner.run().await; // Use tmp_node_runner in the spawned task
         })
     }).collect::<Vec<_>>();
     
-    
+    for handle in handles {
+        handle.await.unwrap();
+    }
+
 }
