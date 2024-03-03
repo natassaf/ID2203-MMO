@@ -58,8 +58,6 @@ impl NodeRunner {
                 },
                 _ = outgoing_interval.tick() => { 
                     self.send_outgoing_msgs().await; 
-                    // Call apply_replicated_txns
-                    //self.node.lock().unwrap().apply_replicated_txns();
                 },
                 Some(msg) = self.incoming.recv() => {
                     self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
@@ -73,7 +71,6 @@ pub struct Node {
     pub node_id: NodeId,
     pub omni_paxos_durability: OmniPaxosDurability,
     pub datastore: ExampleDatastore,
-    pub leader_id: Option<NodeId>,
     pub latest_decided_idx: u64,
 }
 
@@ -84,7 +81,6 @@ impl Node {
             // TODO Datastore and OmniPaxosDurability
             omni_paxos_durability:omni_durability,
             datastore: ExampleDatastore::new(),
-            leader_id: None,
             latest_decided_idx:0
         };
     }
@@ -94,14 +90,9 @@ impl Node {
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
-        let leader_id = self.omni_paxos_durability.omnipaxos.get_current_leader();
-        if leader_id.is_some() && leader_id.unwrap() != self.node_id {
-            self.leader_id = leader_id;
-        } else {
-            self.leader_id = None;
-        }
-
-        if self.leader_id.is_some() {
+        self.omni_paxos_durability.omnipaxos.tick();
+        let leader_id = self.omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
+        if leader_id == self.node_id {
             self.apply_replicated_txns();
         } else {
             self.rollback_unreplicated_txns();
