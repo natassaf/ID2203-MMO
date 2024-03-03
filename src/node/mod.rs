@@ -111,7 +111,7 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         // TODO
         let mut idx = self.latest_decided_idx;
-        let mut iddex: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
+        let iddex: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if idx < iddex {
             let entries =self.omni_paxos_durability.iter_starting_from_offset(TxOffset( idx));
             for (txOffset, txData) in entries {
