@@ -59,7 +59,7 @@ impl NodeRunner {
                 _ = outgoing_interval.tick() => { 
                     self.send_outgoing_msgs().await; 
                     // Call apply_replicated_txns
-                    self.node.lock().unwrap().apply_replicated_txns();
+                    //self.node.lock().unwrap().apply_replicated_txns();
                 },
                 Some(msg) = self.incoming.recv() => {
                     self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
@@ -169,13 +169,10 @@ impl Node {
     }
     
     fn rollback_unreplicated_txns(&mut self) {
-        let current_idx = self.omni_paxos_durability.omnipaxos.get_current_idx();
+        let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         let committed_idx = self.latest_decided_idx;
         if current_idx < committed_idx {
-            let entries = self.omni_paxos_durability.iter_starting_from_offset(TxOffset(current_idx));
-            for (txOffset, _) in entries {
-                self.datastore.rollback_tx(txOffset.0.to_string());
-            }
+            self.datastore.rollback_to_replicated_durability_offset();
         }
     }
 }
