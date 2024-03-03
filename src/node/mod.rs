@@ -104,16 +104,18 @@ impl Node {
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
-        let committed_idx = self.latest_decided_idx;
-        if current_idx > committed_idx {
+        if current_idx > self.latest_decided_idx {
             self.begin_tx(durability_level::DurabilityLevel::Replicated);
             let mut txns: Vec<OmniLogEntry> = self.omni_paxos_durability.omnipaxos.read_decided_suffix(committed_idx).unwrap();
             for txn in txns {
-                let mut cursor = Cursor::new(txn.data);
-                let key = bincode::deserialize_from(&mut cursor).unwrap();
-                let value = bincode::deserialize_from(&mut cursor).unwrap();
-                self.begin_mut_tx().unwrap();
-                self.commit_mut_tx(txn.tx_offset, key, value).unwrap();
+                match txn {
+                    OmniLogEntry::Decided(entry) => {
+                        // Put here the logic to apply the transaction to the datastore
+                        self.datastore.apply_txn(entry.tx_data);
+    
+                    }
+                    _ => {}
+                }
             }
             self.latest_decided_idx = current_idx;
             self.advance_replicated_durability_offset().unwrap();
@@ -147,15 +149,15 @@ impl Node {
         self.datastore.commit_mut_tx(tx)
     }
 
-    // fn advance_replicated_durability_offset(
-    //     &self,
-    // ) -> Result<(), crate::datastore::error::DatastoreError> {
-    //     let result = self.datastore.get_replicated_offset();
-    //     match result {
-    //         Some(offset) => self.datastore.advance_replicated_durability_offset(offset),
-    //         None => Err(DatastoreError::ReplicatedOffsetNotAvailable),
-    //     }
-    // }
+    fn advance_replicated_durability_offset(
+        &self,
+    ) -> Result<(), crate::datastore::error::DatastoreError> {
+     let result = self.datastore.get_replicated_offset();
+       match result {
+           Some(offset) => self.datastore.advance_replicated_durability_offset(offset),
+           None => Err(DatastoreError::ReplicatedOffsetNotAvailable),
+       }
+    }
     
     fn rollback_unreplicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
