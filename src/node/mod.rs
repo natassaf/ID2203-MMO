@@ -56,9 +56,11 @@ impl NodeRunner {
                 },
                 _ = outgoing_interval.tick() => { 
                     self.send_outgoing_msgs().await; 
+                    // Call apply_replicated_txns
+                    self.node.lock().unwrap().apply_replicated_txns();
                 },
                 Some(msg) = self.incoming.recv() => {
-                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_message(msg);
+                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
                 },
             }
         }
