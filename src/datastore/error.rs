@@ -14,6 +14,8 @@ pub enum DatastoreError {
     NotLeader,
     #[error("Cannot replay a transaction on top of a datastore with unreplicated changes.")]
     InvalidDurabilityOffset,
+    #[error("Cannot ---.")]
+    ReplicatedOffsetNotAvailable
 }
 
 impl Default for DatastoreError {

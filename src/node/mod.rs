@@ -5,7 +5,11 @@ use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::omnipaxos_durability::OmniLogEntry;
 use crate::durability::{DurabilityLayer, DurabilityLevel};
 use std::collections::HashMap;
+use std::io::Cursor;
+use std::io::Read;
+use std::ops::Index;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use crate::datastore::{self, *};
 use omnipaxos::{messages::*, OmniPaxos};
 use omnipaxos::util::{LogEntry, NodeId};
@@ -56,7 +60,7 @@ impl NodeRunner {
                     self.send_outgoing_msgs().await;
                 }
                 Some(msg) = self.incoming.recv() => {
-                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_message(msg);
+                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.(msg);
                 }
             }
         }
@@ -68,7 +72,7 @@ pub struct Node {
     pub omni_paxos_durability: OmniPaxosDurability,
     pub datastore: ExampleDatastore,
     pub leader_id: Option<NodeId>,
-    pub latest_decided_idx: usize,
+    pub latest_decided_idx: u64,
 }
 
 impl Node {
@@ -103,14 +107,20 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         // TODO
         let mut idx = self.latest_decided_idx;
-        let mut txns = self.omni_paxos_durability.omnipaxos.get_decided_log_entries();
-        while idx < txns.len() {
-            let txn = txns.get(idx).unwrap();
-            let result = self.datastore.apply_txn(&txn);
-            if result.is_ok() {
+        let mut iddex: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
+        if idx < iddex {
+            let entries =self.omni_paxos_durability.iter_starting_from_offset(TxOffset( idx));
+            for (txOffset, txData) in entries {
+                let mut tx = self.datastore.begin_mut_tx();
+                // Create a mutable vector to act as a buffer
+                let mut buffer = Vec::new();
+
+                // Convert the buffer into a Write type (Cursor)
+                let mut cursor = Cursor::new(&mut buffer);
+                txData.serialize(&mut cursor);
+                let value = String::from_utf8(buffer).unwrap();      
+                tx.set(txOffset.0.to_string(), value);    
                 idx += 1;
-            } else {
-                break;
             }
         }
         self.latest_decided_idx = idx;
