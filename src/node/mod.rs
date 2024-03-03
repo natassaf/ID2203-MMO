@@ -113,7 +113,7 @@ impl Node {
         if idx < iddex {
             let entries =self.omni_paxos_durability.iter_starting_from_offset(TxOffset( idx));
             for (txOffset, txData) in entries {
-                let mut tx = self.datastore.begin_mut_tx();
+                let mut tx = self.begin_mut_tx().unwrap();
                 // Create a mutable vector to act as a buffer
                 let mut buffer = Vec::new();
 
