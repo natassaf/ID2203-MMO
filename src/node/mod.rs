@@ -69,6 +69,7 @@ impl NodeRunner {
     }
 }
 
+
 pub struct Node {
     pub node_id: NodeId,
     pub omni_paxos_durability: OmniPaxosDurability,

@@ -5,7 +5,7 @@ use omnipaxos::{messages::Message, util::NodeId, ClusterConfig, OmniPaxosConfig,
 use omnipaxos_storage::memory_storage::MemoryStorage;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex}, thread,
 };
 use tokio::{runtime::Builder, sync::mpsc,};
 
@@ -13,8 +13,10 @@ pub mod datastore;
 pub mod durability;
 pub mod node;
 pub mod utils;
-
+use std::{sync::atomic::AtomicBool};
 const SERVERS: [NodeId; 3] = [1, 2, 3];
+use signal_hook::{self, consts::{SIGINT, SIGTERM}};
+use crossbeam::channel::{self, Receiver};
 
 #[allow(clippy::type_complexity)]
 fn initialize_channels() -> (
@@ -74,6 +76,27 @@ fn main() {
             node_runner.run().await; // Use tmp_node_runner in the spawned task
         })
     }).collect::<Vec<_>>();
-    
-    
+
+    // Atomic boolean flag to indicate whether the shutdown signal has been received
+    let running = Arc::new(AtomicBool::new(true));
+
+    // Channel to communicate the shutdown signal
+    let (shutdown_tx, shutdown_rx): (channel::Sender<()>, channel::Receiver<()>) = channel::bounded(1);
+
+
+    // Spawn a separate thread to handle the signal
+    let running_clone = Arc::clone(&running);
+    let signal_handler = thread::spawn(move || {
+        // Register SIGINT signal handler
+        let _ = signal_hook::flag::register(SIGTERM, Arc::clone(&running_clone));
+
+        print!("recieve shutdown signal\n");
+        // Wait for the shutdown signal
+        shutdown_rx.recv().unwrap();
+    });
+        // Wait for the signal handler thread to finish
+        signal_handler.join().unwrap();
+        
+        println!("Gracefully shut down.");
+
 }
