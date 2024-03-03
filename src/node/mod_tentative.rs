@@ -12,38 +12,40 @@ use omnipaxos::util::{LogEntry, NodeId};
 use std::borrow::Borrow;
 use tokio::{sync::mpsc, time};
 
-pub const BUFFER_SIZE: usize = 10000;
-pub const ELECTION_TICK_TIMEOUT: u64 = 5;
+
+// New use
+use std::time::Duration;
+
+pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(2);
 pub const TICK_PERIOD: Duration = Duration::from_millis(10);
-pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(1);
-pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
-pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
+pub const BUFFER_SIZE: usize = 10000;
 
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
     // TODO Messaging and running
     pub incoming: mpsc::Receiver<Message<OmniLogEntry>>,
-    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>
+    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
 }
 
 impl NodeRunner {
     async fn send_outgoing_msgs(&mut self) {
-        let messages = self
+        let all_outgoing_omnipaxos_messages = self
             .node
             .lock()
             .unwrap()
-            .omni_paxos_durability
-            .omnipaxos
+            .omnipaxos_durability
+            .omni_paxos
             .outgoing_messages();
-        for msg in messages {
-            let receiver = msg.get_receiver();
+        for message in all_outgoing_omnipaxos_messages{
+            let receiver = message.get_receiver();
             let channel = self
                 .outgoing
                 .get_mut(&receiver)
-                .expect("No channel for receiver");
-            let _ = channel.send(msg).await;
+                .expect("There is no channel for the receiver");
+            let _ = channel.send(message).await;
         }
     }
+
 
     pub async fn run(&mut self) {
         let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
@@ -52,35 +54,54 @@ impl NodeRunner {
             tokio::select! {
                 biased;
                 _ = tick_interval.tick() => {
-                    self.node.lock().unwrap().update_leader();
-                    self.send_outgoing_msgs().await;
-                }
-                Some(msg) = self.incoming.recv() => {
-                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_message(msg);
-                }
+                    self
+                    .node
+                    .lock()
+                    .unwrap()
+                    .omnipaxos_durability
+                    .omni_paxos
+                    .tick();
+                },
+                _ = outgoing_interval.tick() => {
+                    self
+                    .send_outgoing_msgs().await;
+                },
+                Some(in_message) = self.incoming.recv() => {
+                    self
+                    .node
+                    .lock()
+                    .unwrap()
+                    .omnipaxos_durability
+                    .omni_paxos
+                    .handle_incoming(in_message);
+                },
+                else => {}
             }
         }
     }
 }
 
+
 pub struct Node {
-    pub node_id: NodeId,
-    pub omni_paxos_durability: OmniPaxosDurability,
-    pub datastore: ExampleDatastore,
-    pub leader_id: Option<NodeId>,
-    pub latest_decided_idx: usize,
+    node_id: NodeId, // Unique identifier for the node
+                     // TODO Datastore and OmniPaxosDurability
+                    
+    omnipaxos_durability: OmniPaxosDurability,
+    datastore: example_datastore::ExampleDatastore,
+
+    
 }
 
 impl Node {
     pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability) -> Self {
-        return Node{
-            node_id: node_id,
-            // TODO Datastore and OmniPaxosDurability
-            omni_paxos_durability:omni_durability,
-            datastore: ExampleDatastore::new(),
-            leader_id: None,
-            latest_decided_idx:0
-        };
+        //todo!()
+        Node{
+            node_id,
+            omnipaxos_durability:omni_durability,
+            datastore: example_datastore::ExampleDatastore::new(),
+            //leader_id:NodeId
+
+        }
     }
 
     /// update who is the current leader. If a follower becomes the leader,
@@ -88,52 +109,37 @@ impl Node {
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
-        // TODO
-        let leader_id = self.omni_paxos_durability.omnipaxos.get_leader();
-        if leader_id.is_some() && leader_id.unwrap() != self.node_id {
-            self.leader_id = leader_id;
-        } else {
-            self.leader_id = None;
-        }
+        todo!()
     }
 
     /// Apply the transactions that have been decided in OmniPaxos to the Datastore.
     /// We need to be careful with which nodes should do this according to desired
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
-        // TODO
-        let mut idx = self.latest_decided_idx;
-        let mut txns = self.omni_paxos_durability.omnipaxos.get_decided_log_entries();
-        while idx < txns.len() {
-            let txn = txns.get(idx).unwrap();
-            let result = self.datastore.apply_txn(&txn);
-            if result.is_ok() {
-                idx += 1;
-            } else {
-                break;
-            }
-        }
-        self.latest_decided_idx = idx;
+        //todo!()
+        
+
     }
 
     pub fn begin_tx(
         &self,
         durability_level: DurabilityLevel,
     ) -> <ExampleDatastore as Datastore<String, String>>::Tx {
-        // TODO
+        //todo!()
         self.datastore.begin_tx(durability_level)
     }
 
     pub fn release_tx(&self, tx: <ExampleDatastore as Datastore<String, String>>::Tx) {
-        // TODO
+        //todo!()
         self.datastore.release_tx(tx)
+
     }
 
     /// Begins a mutable transaction. Only the leader is allowed to do so.
     pub fn begin_mut_tx(
         &self,
     ) -> Result<<ExampleDatastore as Datastore<String, String>>::MutTx, DatastoreError> {
-        // TODO
+        //todo!()
         Ok(self.datastore.begin_mut_tx())
     }
 
@@ -142,28 +148,30 @@ impl Node {
         &mut self,
         tx: <ExampleDatastore as Datastore<String, String>>::MutTx,
     ) -> Result<TxResult, DatastoreError> {
-        // TODO
+        //todo!()
         self.datastore.commit_mut_tx(tx)
+
     }
 
     fn advance_replicated_durability_offset(
         &self,
     ) -> Result<(), crate::datastore::error::DatastoreError> {
-        // TODO
+        //todo!()
         let result=self.datastore.get_replicated_offset();
         match result{
             Some(offset)=> self.datastore.advance_replicated_durability_offset(offset),
-            None=> Err(DatastoreError::ReplicatedOffsetNotAvailable)
+            None => Err(DatastoreError::default()),
         }
+        
     }
 }
 
 /// Your test cases should spawn up multiple nodes in tokio and cover the following:
-/// 1. Find the leader and commit a transaction. Show that the transaction is really *chosen* (according to our definition in Paxos) among the nodes.
+/// 1. Find the leader and commit a transaction. Show that the transaction is really chosen (according to our definition in Paxos) among the nodes.
 /// 2. Find the leader and commit a transaction. Kill the leader and show that another node will be elected and that the replicated state is still correct.
 /// 3. Find the leader and commit a transaction. Disconnect the leader from the other nodes and continue to commit transactions before the OmniPaxos election timeout.
 /// Verify that the transaction was first committed in memory but later rolled back.
-/// 4. Simulate the 3 partial connectivity scenarios from the OmniPaxos liveness lecture. Does the system recover? *NOTE* for this test you may need to modify the messaging logic.
+/// 4. Simulate the 3 partial connectivity scenarios from the OmniPaxos liveness lecture. Does the system recover? NOTE for this test you may need to modify the messaging logic.
 ///
 /// A few helper functions to help structure your tests have been defined that you are welcome to use.
 #[cfg(test)]
@@ -184,7 +192,16 @@ mod tests {
         HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
         HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>,
     ) {
-        todo!()
+
+        let mut sender_channels = HashMap::new();
+        let mut receiver_channels = HashMap::new();
+
+        for pid in SERVERS {
+            let (sender, receiver) = mpsc::channel(BUFFER_SIZE);
+            sender_channels.insert(pid, sender);
+            receiver_channels.insert(pid, receiver);
+        }
+        (sender_channels, receiver_channels)
     }
 
     fn create_runtime() -> Runtime {
@@ -196,7 +213,7 @@ mod tests {
     }
 
     fn spawn_nodes(runtime: &mut Runtime) -> HashMap<NodeId, (Arc<Mutex<Node>>, JoinHandle<()>)> {
-        let mut nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = HashMap::new();
+        let mut nodes = HashMap::new();
         let (sender_channels, mut receiver_channels) = initialise_channels();
         for pid in SERVERS {
             todo!("spawn the nodes")
