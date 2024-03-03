@@ -147,21 +147,21 @@ impl Node {
         self.datastore.commit_mut_tx(tx)
     }
 
-    fn advance_replicated_durability_offset(
-        &self,
-    ) -> Result<(), crate::datastore::error::DatastoreError> {
-        let result = self.datastore.get_replicated_offset();
-        match result {
-            Some(offset) => self.datastore.advance_replicated_durability_offset(offset),
-            None => Err(DatastoreError::ReplicatedOffsetNotAvailable),
-        }
-    }
+    // fn advance_replicated_durability_offset(
+    //     &self,
+    // ) -> Result<(), crate::datastore::error::DatastoreError> {
+    //     let result = self.datastore.get_replicated_offset();
+    //     match result {
+    //         Some(offset) => self.datastore.advance_replicated_durability_offset(offset),
+    //         None => Err(DatastoreError::ReplicatedOffsetNotAvailable),
+    //     }
+    // }
     
     fn rollback_unreplicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         let committed_idx = self.latest_decided_idx;
         if current_idx < committed_idx {
-            self.datastore.rollback_to_replicated_durability_offset();
+           _ = self.datastore.rollback_to_replicated_durability_offset();
         }
     }
 }
