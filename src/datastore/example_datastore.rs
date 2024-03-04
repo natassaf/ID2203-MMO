@@ -132,6 +132,7 @@ impl CommittedState {
         tx_offset: super::TxOffset,
     ) -> Result<(), super::error::DatastoreError> {
         for (k, tx_diff) in &mut self.committed_diff {
+
             while !tx_diff.history.is_empty() {
                 // TODO: This is all a bit silly.
                 // This should binary search to the latest
@@ -195,6 +196,7 @@ impl MutTx {
     }
 
     pub fn set(&mut self, key: String, value: String) {
+        println!("Va: {:?}", value);
         self.diff.insert(key, Diff::Insert(value));
     }
 
@@ -242,6 +244,7 @@ impl Datastore<String, String> for ExampleDatastore {
         let offset = tx.committed_state.next_tx_offset;
         let mut inserts = Vec::new();
         let mut deletes = Vec::new();
+        println!("tx.diff {:?}", tx.diff);
         for (key, diff) in tx.diff {
             match tx.committed_state.committed_diff.get_mut(&key) {
                 Some(tx_diff) => tx_diff.insert_diff(offset, diff.clone()),

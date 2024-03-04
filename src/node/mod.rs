@@ -10,6 +10,7 @@ use crate::durability::omnipaxos_durability::OmniLogEntry;
 use crate::durability::DurabilityLevel;
 use std::collections::HashMap;
 use std::f32::consts::E;
+use std::io::Bytes;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use omnipaxos::messages::Message;
@@ -124,10 +125,8 @@ impl Node {
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
-        println!("current_idx: {:?}", current_idx); 
         if current_idx > self.latest_decided_idx {
             let decided_entries: Vec<LogEntry<OmniLogEntry>>= self.omni_paxos_durability.omnipaxos.read_decided_suffix(self.latest_decided_idx).unwrap();
-            println!("length of decided_entries: {:?}", decided_entries.len()); 
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
            match self.advance_replicated_durability_offset(){
@@ -143,7 +142,11 @@ impl Node {
             
         let mut bytes = Vec::new();
         let _ = tx_data.serialize(&mut bytes).unwrap();
-        let tx_data_str  = String::from_utf8(bytes).expect("Invalid UTF-8 sequence");
+        let tx_data_str = match String::from_utf8(bytes.to_vec()) {
+            Ok(s) => s,
+            Err(e) => panic!("Error converting byte array to string: {:?}", e),
+        };
+        println!("{}", tx_data_str); // Output: Hello
 
         tx.set(tx_offset_str, tx_data_str);
         tx
@@ -191,10 +194,13 @@ impl Node {
         &self,
     ) -> Result<(), crate::datastore::error::DatastoreError> {
      let result = self.datastore.get_replicated_offset();
-        println!("Result {:?}", result);
        match result {
-           Some(offset) => self.datastore.advance_replicated_durability_offset(offset),
-           None => Err(DatastoreError::ReplicatedOffsetNotAvailable),
+           Some(offset) => {
+            self.datastore.advance_replicated_durability_offset(offset)
+        },
+           None => {
+            self.datastore.advance_replicated_durability_offset(TxOffset(0))
+        },
        }
     }
     
@@ -361,13 +367,11 @@ mod tests {
             .omni_paxos_durability.omnipaxos
             .get_current_leader()
             .expect("Failed to get leader");
-        println!("Elected leader: {}", leader);
 
         let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
         //add a mutable transaction to the leader
         let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
         tx.set("foo".to_string(), "bar".to_string());
-        
         let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
         leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
 
