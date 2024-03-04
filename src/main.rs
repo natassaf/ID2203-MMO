@@ -1,8 +1,7 @@
-use durability::{OmniLogEntry, OmniPaxosDurability};
-pub use omnipaxos_durability::*;
+use durability::{ OmniLogEntry, OmniPaxosDurability};
 pub use std::sync::mpsc::channel;
 use node::{Node, NodeRunner, BUFFER_SIZE, ELECTION_TICK_TIMEOUT};
-use omnipaxos::{messages::Message, util::NodeId};
+use omnipaxos::{messages::Message, util::NodeId, ClusterConfig, OmniPaxosConfig, ServerConfig};
 use omnipaxos_storage::memory_storage::MemoryStorage;
 use std::{
     collections::HashMap,
@@ -33,7 +32,8 @@ fn initialize_channels() -> (
     (sender_channels, receiver_channels)
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let runtime = Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()
@@ -41,10 +41,9 @@ fn main() {
         .unwrap();
 
     let configuration_id = 1;
-    let mut op_server_handles = HashMap::new();
     let (sender_channels, mut receiver_channels) = initialize_channels();
 
-    for pid in SERVERS {
+    let node_runners = SERVERS.map(|pid| {
         let server_config = ServerConfig {
             pid,
             election_tick_timeout: ELECTION_TICK_TIMEOUT,
@@ -55,23 +54,31 @@ fn main() {
             nodes: SERVERS.into(),
             ..Default::default()
         };
-        let op_config = OmniPaxosConfig {
+        let omnipaxos_config = OmniPaxosConfig {
             server_config,
             cluster_config,
         };
         let storage: MemoryStorage<OmniLogEntry> = MemoryStorage::default();
-        let omni_paxos: Arc<Mutex<OmniPaxosDurability>> = Arc::new(Mutex::new(op_config.build(storage).unwrap()));
-        let mut node: Node = Node::new(pid, omni_paxos);
-        let mut node_runner: NodeRunner = NodeRunner {
+        let omnipaxos = omnipaxos_config.build( storage).unwrap();
+        let omnipaxos_durability = OmniPaxosDurability::new(omnipaxos);
+        let  node: Node = Node::new(pid, omnipaxos_durability);
+        let  node_runner: NodeRunner = NodeRunner {
             node: Arc::new(Mutex::new(node)),
             incoming: receiver_channels.remove(&pid).unwrap(),
-            outgoing: sending_channels.clone(),
+            outgoing: sender_channels.clone(),
         };
-    };
-    runtime.spawn({
-        async move {
-            node_runner.run().await;
-        }
+        node_runner
     });
+
+
+    let handles: Vec<tokio::task::JoinHandle<()>> = node_runners.into_iter().map(|mut node_runner| {
+        runtime.spawn(async move {
+            node_runner.run().await; // Use tmp_node_runner in the spawned task
+        })
+    }).collect::<Vec<_>>();
+    
+    for handle in handles {
+        handle.await.unwrap();
+    }
 
 }

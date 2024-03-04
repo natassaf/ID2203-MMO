@@ -1,24 +1,30 @@
 use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
-use crate::datastore::{self, *};
-use crate::durability::omnipaxos_durability::{self, OmniPaxosDurability};
-use crate::durability::{DurabilityLayer, DurabilityLevel, OmniLogEntry};
-use omnipaxos::messages::*;
-use omnipaxos::util::NodeId;
-use tokio::time;
+use crate::datastore::Datastore;
+use crate::durability::omnipaxos_durability::OmniPaxosDurability;
+use crate::durability::omnipaxos_durability::OmniLogEntry;
+use crate::durability::DurabilityLevel;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
 use std::time::Duration;
+use omnipaxos::messages::Message;
+use omnipaxos::util::LogEntry;
+use omnipaxos::util::NodeId;
+use omnipaxos::OmniPaxos;
+use omnipaxos_storage::memory_storage::MemoryStorage;
+use tokio::{sync::mpsc, time};
 
 pub const BUFFER_SIZE: usize = 10000;
 pub const ELECTION_TICK_TIMEOUT: u64 = 5;
 pub const TICK_PERIOD: Duration = Duration::from_millis(10);
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(1);
-
 pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
 pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
+
+
+type OmniPaxosKV = OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>;
+
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
     // TODO Messaging and running
@@ -28,7 +34,13 @@ pub struct NodeRunner {
 
 impl NodeRunner {
     async fn send_outgoing_msgs(&mut self) {
-        let messages = self.node.lock().unwrap().omni_paxos_durability.omnipaxos.outgoing_messages();
+        let messages = self
+            .node
+            .lock()
+            .unwrap()
+            .omni_paxos_durability
+            .omnipaxos
+            .outgoing_messages();
         for msg in messages {
             let receiver = msg.get_receiver();
             let channel = self
@@ -39,29 +51,32 @@ impl NodeRunner {
         }
     }
 
-    pub(crate) async fn run(&mut self) {
+    pub async fn run(&mut self) {
         let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
         let mut tick_interval = time::interval(TICK_PERIOD);
         loop {
             tokio::select! {
                 biased;
-
-                _ = tick_interval.tick() => { self.node.lock().unwrap().omni_paxos_durability.omnipaxos.tick(); },
-                _ = outgoing_interval.tick() => { self.send_outgoing_msgs().await; },
-                Some(in_msg) = self.incoming.recv() => {self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(in_msg); },
-                else => { }
+                _ = tick_interval.tick() => {
+                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.tick();
+                    self.node.lock().unwrap().update_leader();
+                },
+                _ = outgoing_interval.tick() => { 
+                    self.send_outgoing_msgs().await; 
+                },
+                Some(msg) = self.incoming.recv() => {
+                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
+                }
             }
         }
     }
-
 }
 
 pub struct Node {
-    node_id: NodeId, // Unique identifier for the node
-    omni_paxos_durability: OmniPaxosDurability,
-    datastore: ExampleDatastore,
-    leader_id: Option<NodeId> ,// Unique identifier for the node that is the leader
-    latest_decided_idx: usize // Index of the latest decided log entry
+    pub node_id: NodeId,
+    pub omni_paxos_durability: OmniPaxosDurability,
+    pub datastore: ExampleDatastore,
+    pub latest_decided_idx: u64,
 }
 
 impl Node {
@@ -71,7 +86,6 @@ impl Node {
             // TODO Datastore and OmniPaxosDurability
             omni_paxos_durability:omni_durability,
             datastore: ExampleDatastore::new(),
-            leader_id: None,
             latest_decided_idx:0
         };
     }
@@ -81,23 +95,11 @@ impl Node {
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self) {
-    
-        let current_leader =  self.omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
-        
-        if current_leader == self.node_id {
-            // TODO: apply unapplied txns to the datastore 
-            self.leader_id = Some(current_leader);
-
-            return; 
-        }
-        let previous_leader = match self.leader_id{
-            Some(l)=>l,
-            None=> {self.leader_id = Some(current_leader); return} 
-        };
-
-        if previous_leader == self.node_id{
-                //TODO: rollback the txns committed in memory that have not been replicated yet
-                self.leader_id = Some(current_leader);
+        let leader_id = self.omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
+        if leader_id == self.node_id {
+            self.apply_replicated_txns();
+        } else {
+            self.rollback_unreplicated_txns();
         }
     }
 
@@ -105,26 +107,50 @@ impl Node {
     /// We need to be careful with which nodes should do this according to desired
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
-        todo!()
+        let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
+        if current_idx > self.latest_decided_idx {
+            let decided_entries= self.omni_paxos_durability.omnipaxos.read_decided_suffix(current_idx).unwrap();
+            self.update_database(decided_entries);
+            self.latest_decided_idx = current_idx;
+            self.advance_replicated_durability_offset().unwrap();
+        }
+    }
+
+    fn update_database(&self, decided_entries: Vec<LogEntry<OmniLogEntry>>) {
+        for entry in decided_entries {
+            match entry {
+                LogEntry::Decided(entry) => {
+                    let mut tx1 = self.datastore.begin_mut_tx();
+                    let tx_offset_str = entry.tx_offset.0.to_string();
+                        
+                    let mut bytes = Vec::new();
+                    let _ = entry.tx_data.serialize(&mut bytes).unwrap();
+                    let tx_data_str  = String::from_utf8(bytes).expect("Invalid UTF-8 sequence");
+
+                    tx1.set(tx_offset_str, tx_data_str);
+                    self.datastore.commit_mut_tx(tx1).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn begin_tx(
         &self,
         durability_level: DurabilityLevel,
     ) -> <ExampleDatastore as Datastore<String, String>>::Tx {
-        todo!()
+        self.datastore.begin_tx(durability_level)
     }
 
     pub fn release_tx(&self, tx: <ExampleDatastore as Datastore<String, String>>::Tx) {
-        todo!()
+        self.datastore.release_tx(tx)
     }
 
     /// Begins a mutable transaction. Only the leader is allowed to do so.
     pub fn begin_mut_tx(
         &self,
     ) -> Result<<ExampleDatastore as Datastore<String, String>>::MutTx, DatastoreError> {
-    
-        todo!()
+        Ok(self.datastore.begin_mut_tx())
     }
 
     /// Commits a mutable transaction. Only the leader is allowed to do so.
@@ -132,16 +158,26 @@ impl Node {
         &mut self,
         tx: <ExampleDatastore as Datastore<String, String>>::MutTx,
     ) -> Result<TxResult, DatastoreError> {
-        
-        todo!()
-    
+        self.datastore.commit_mut_tx(tx)
     }
 
     fn advance_replicated_durability_offset(
         &self,
     ) -> Result<(), crate::datastore::error::DatastoreError> {
-        todo!()
+     let result = self.datastore.get_replicated_offset();
+       match result {
+           Some(offset) => self.datastore.advance_replicated_durability_offset(offset),
+           None => Err(DatastoreError::ReplicatedOffsetNotAvailable),
+       }
     }
+    
+    fn rollback_unreplicated_txns(&mut self) {
+        let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
+        let committed_idx = self.latest_decided_idx;
+        if current_idx < committed_idx {
+           _ = self.datastore.rollback_to_replicated_durability_offset();
+        }
+     }
 }
 
 /// Your test cases should spawn up multiple nodes in tokio and cover the following:
@@ -157,6 +193,7 @@ mod tests {
     use crate::node::*;
     use omnipaxos::messages::Message;
     use omnipaxos::util::NodeId;
+    use omnipaxos::{ClusterConfig, OmniPaxosConfig, ServerConfig};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tokio::runtime::{Builder, Runtime};
@@ -170,7 +207,16 @@ mod tests {
         HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
         HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>,
     ) {
-        todo!()
+        // TODO: Implement channel initialization
+        let mut sender_channels = HashMap::new();
+        let mut receiver_channels = HashMap::new();
+    
+        for pid in SERVERS {
+            let (sender, receiver) = mpsc::channel(BUFFER_SIZE);
+            sender_channels.insert(pid, sender);
+            receiver_channels.insert(pid, receiver);
+        }
+        (sender_channels, receiver_channels)
     }
 
     fn create_runtime() -> Runtime {
@@ -184,9 +230,77 @@ mod tests {
     fn spawn_nodes(runtime: &mut Runtime) -> HashMap<NodeId, (Arc<Mutex<Node>>, JoinHandle<()>)> {
         let mut nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = HashMap::new();
         let (sender_channels, mut receiver_channels) = initialise_channels();
+        let mut nodes = HashMap::new();
         for pid in SERVERS {
-            todo!("spawn the nodes")
+            // TODO: Spawn the nodes
+            let server_config = ServerConfig {
+                pid,
+                election_tick_timeout: ELECTION_TICK_TIMEOUT,
+                ..Default::default()
+            };
+            let configuration_id = 1;
+            let cluster_config = ClusterConfig {
+                configuration_id,
+                nodes: SERVERS.into(),
+                ..Default::default()
+            };
+            let omnipaxos_config = OmniPaxosConfig {
+                server_config,
+                cluster_config,
+            };
+            let storage: MemoryStorage<OmniLogEntry> = MemoryStorage::default();
+            let omnipaxos = omnipaxos_config.build( storage).unwrap();
+            let omnipaxos_durability = OmniPaxosDurability::new(omnipaxos);
+            let  node = Arc::new(Mutex::new(Node::new(pid, omnipaxos_durability)));
+            let mut node_runner: NodeRunner = NodeRunner {
+                node: node.clone(),
+                incoming: receiver_channels.remove(&pid).unwrap(),
+                outgoing: sender_channels.clone(),
+            };
+            let handle = runtime.spawn(async move {
+                node_runner.run().await; // Use tmp_node_runner in the spawned task
+            });
+            
+            nodes.insert(pid,(node, handle));
         }
         nodes
+    }
+
+    #[tokio::test]
+    async fn test_find_leader_and_commit_transaction() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+        // TODO: Implement the test case
+        runtime.shutdown_background();
+    }
+
+    #[tokio::test]
+    async fn test_kill_leader_and_elect_new_leader() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // TODO: Implement the test case
+
+        runtime.shutdown_background();
+    }
+
+    #[tokio::test]
+    async fn test_disconnect_leader_and_rollback_transactions() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // TODO: Implement the test case
+
+        runtime.shutdown_background();
+    }
+
+    #[tokio::test]
+    async fn test_partial_connectivity_scenarios() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // TODO: Implement the test case
+
+        runtime.shutdown_background();
     }
 }
