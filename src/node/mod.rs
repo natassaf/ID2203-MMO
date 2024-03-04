@@ -112,8 +112,7 @@ impl Node {
             let decided_entries= self.omni_paxos_durability.omnipaxos.read_decided_suffix(current_idx).unwrap();
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
-            // self.advance_replicated_durability_offset().unwrap();
-            // self.release_tx(tx);
+            self.advance_replicated_durability_offset().unwrap();
         }
     }
 
@@ -125,11 +124,11 @@ impl Node {
                     let tx_offset_str = entry.tx_offset.0.to_string();
                         
                     let mut bytes = Vec::new();
-                    let result = entry.tx_data.serialize(&mut bytes).unwrap();
+                    let _ = entry.tx_data.serialize(&mut bytes).unwrap();
                     let tx_data_str  = String::from_utf8(bytes).expect("Invalid UTF-8 sequence");
 
                     tx1.set(tx_offset_str, tx_data_str);
-                    self.datastore.commit_mut_tx(tx1);
+                    self.datastore.commit_mut_tx(tx1).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
                 }
                 _ => {}
             }
@@ -181,11 +180,20 @@ impl Node {
      }
 }
 
+/// Your test cases should spawn up multiple nodes in tokio and cover the following:
+/// 1. Find the leader and commit a transaction. Show that the transaction is really *chosen* (according to our definition in Paxos) among the nodes.
+/// 2. Find the leader and commit a transaction. Kill the leader and show that another node will be elected and that the replicated state is still correct.
+/// 3. Find the leader and commit a transaction. Disconnect the leader from the other nodes and continue to commit transactions before the OmniPaxos election timeout.
+/// Verify that the transaction was first committed in memory but later rolled back.
+/// 4. Simulate the 3 partial connectivity scenarios from the OmniPaxos liveness lecture. Does the system recover? *NOTE* for this test you may need to modify the messaging logic.
+///
+/// A few helper functions to help structure your tests have been defined that you are welcome to use.
 #[cfg(test)]
 mod tests {
     use crate::node::*;
     use omnipaxos::messages::Message;
     use omnipaxos::util::NodeId;
+    use omnipaxos::{ClusterConfig, OmniPaxosConfig, ServerConfig};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tokio::runtime::{Builder, Runtime};
@@ -200,7 +208,15 @@ mod tests {
         HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>,
     ) {
         // TODO: Implement channel initialization
-        unimplemented!()
+        let mut sender_channels = HashMap::new();
+        let mut receiver_channels = HashMap::new();
+    
+        for pid in SERVERS {
+            let (sender, receiver) = mpsc::channel(BUFFER_SIZE);
+            sender_channels.insert(pid, sender);
+            receiver_channels.insert(pid, receiver);
+        }
+        (sender_channels, receiver_channels)
     }
 
     fn create_runtime() -> Runtime {
@@ -214,9 +230,38 @@ mod tests {
     fn spawn_nodes(runtime: &mut Runtime) -> HashMap<NodeId, (Arc<Mutex<Node>>, JoinHandle<()>)> {
         let mut nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = HashMap::new();
         let (sender_channels, mut receiver_channels) = initialise_channels();
+        let mut nodes = HashMap::new();
         for pid in SERVERS {
             // TODO: Spawn the nodes
-            unimplemented!()
+            let server_config = ServerConfig {
+                pid,
+                election_tick_timeout: ELECTION_TICK_TIMEOUT,
+                ..Default::default()
+            };
+            let configuration_id = 1;
+            let cluster_config = ClusterConfig {
+                configuration_id,
+                nodes: SERVERS.into(),
+                ..Default::default()
+            };
+            let omnipaxos_config = OmniPaxosConfig {
+                server_config,
+                cluster_config,
+            };
+            let storage: MemoryStorage<OmniLogEntry> = MemoryStorage::default();
+            let omnipaxos = omnipaxos_config.build( storage).unwrap();
+            let omnipaxos_durability = OmniPaxosDurability::new(omnipaxos);
+            let  node = Arc::new(Mutex::new(Node::new(pid, omnipaxos_durability)));
+            let mut node_runner: NodeRunner = NodeRunner {
+                node: node.clone(),
+                incoming: receiver_channels.remove(&pid).unwrap(),
+                outgoing: sender_channels.clone(),
+            };
+            let handle = runtime.spawn(async move {
+                node_runner.run().await; // Use tmp_node_runner in the spawned task
+            });
+            
+            nodes.insert(pid,(node, handle));
         }
         nodes
     }
@@ -226,7 +271,6 @@ mod tests {
         let mut runtime = create_runtime();
         let nodes = spawn_nodes(&mut runtime);
         // TODO: Implement the test case
-
         runtime.shutdown_background();
     }
 
