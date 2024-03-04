@@ -2,16 +2,17 @@ use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
 use crate::datastore::Datastore;
-use crate::datastore::TxOffset;
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::omnipaxos_durability::OmniLogEntry;
-use crate::durability::{DurabilityLayer, DurabilityLevel};
+use crate::durability::DurabilityLevel;
 use std::collections::HashMap;
-use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use omnipaxos::messages::Message;
+use omnipaxos::util::LogEntry;
 use omnipaxos::util::NodeId;
+use omnipaxos::OmniPaxos;
+use omnipaxos_storage::memory_storage::MemoryStorage;
 use tokio::{sync::mpsc, time};
 
 pub const BUFFER_SIZE: usize = 10000;
@@ -20,6 +21,9 @@ pub const TICK_PERIOD: Duration = Duration::from_millis(10);
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(1);
 pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
 pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
+
+
+type OmniPaxosKV = OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>;
 
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
@@ -105,21 +109,30 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if current_idx > self.latest_decided_idx {
-            self.begin_tx(durability_level::DurabilityLevel::Replicated);
-            let mut txns: Vec<OmniLogEntry> = self.omni_paxos_durability.omnipaxos.read_decided_suffix(committed_idx).unwrap();
-            for txn in txns {
-                match txn {
-                    OmniLogEntry::Decided(entry) => {
-                        // Put here the logic to apply the transaction to the datastore
-                        self.datastore.apply_txn(entry.tx_data);
-    
-                    }
-                    _ => {}
-                }
-            }
+            let decided_entries= self.omni_paxos_durability.omnipaxos.read_decided_suffix(current_idx).unwrap();
+            self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
-            self.advance_replicated_durability_offset().unwrap();
-            self.release_tx(tx);
+            // self.advance_replicated_durability_offset().unwrap();
+            // self.release_tx(tx);
+        }
+    }
+
+    fn update_database(&self, decided_entries: Vec<LogEntry<OmniLogEntry>>) {
+        for entry in decided_entries {
+            match entry {
+                LogEntry::Decided(entry) => {
+                    let mut tx1 = self.datastore.begin_mut_tx();
+                    let tx_offset_str = entry.tx_offset.0.to_string();
+                        
+                    let mut bytes = Vec::new();
+                    let result = entry.tx_data.serialize(&mut bytes).unwrap();
+                    let tx_data_str  = String::from_utf8(bytes).expect("Invalid UTF-8 sequence");
+
+                    tx1.set(tx_offset_str, tx_data_str);
+                    self.datastore.commit_mut_tx(tx1);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -165,7 +178,7 @@ impl Node {
         if current_idx < committed_idx {
            _ = self.datastore.rollback_to_replicated_durability_offset();
         }
-    }
+     }
 }
 
 #[cfg(test)]
@@ -212,7 +225,6 @@ mod tests {
     async fn test_find_leader_and_commit_transaction() {
         let mut runtime = create_runtime();
         let nodes = spawn_nodes(&mut runtime);
-
         // TODO: Implement the test case
 
         runtime.shutdown_background();

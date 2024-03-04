@@ -4,6 +4,7 @@ use super::TableId;
 use crate::datastore::TxOffset;
 use std::sync::Arc;
 
+
 #[derive(Debug, Clone)]
 pub struct RowData(pub Arc<[u8]>);
 

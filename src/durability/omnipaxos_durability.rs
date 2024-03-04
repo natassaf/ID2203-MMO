@@ -10,8 +10,8 @@ use std::{
 
 #[derive(Entry, Clone, Debug)]
 pub struct OmniLogEntry {
-    tx_offset: TxOffset,
-    tx_data: TxData,
+    pub tx_offset: TxOffset,
+    pub tx_data: TxData,
 }
 
 impl OmniLogEntry {
