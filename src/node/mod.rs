@@ -115,7 +115,7 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if current_idx > self.latest_decided_idx {
-            let decided_entries= self.omni_paxos_durability.omnipaxos.read_decided_suffix(current_idx).unwrap();
+            let decided_entries= self.omni_paxos_durability.omnipaxos.read_decided_suffix(self.latest_decided_idx).unwrap();
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
             self.advance_replicated_durability_offset().unwrap();
@@ -276,7 +276,7 @@ mod tests {
                 outgoing: sender_channels.clone(),
             };
             let handle = runtime.spawn(async move {
-                node_runner.run().await; // Use tmp_node_runner in the spawned task
+                node_runner.run().await; 
             });
             
             nodes.insert(pid,(node, handle));
