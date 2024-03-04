@@ -68,7 +68,18 @@ impl NodeRunner {
                     self.send_outgoing_msgs().await; 
                 },
                 Some(msg) = self.incoming.recv() => {
-                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
+                        match msg {
+                            Message::BLE(_msg) => {
+                                return {};
+                            },
+                            Message::SequencePaxos(msg) => {
+                                match msg {
+                                    OmniLogEntry::Tx
+                                }
+                                self.node.lock.unwrap().log_entry_to_db_entry();
+                            }
+                        }
+                 
                 }
             }
         }
@@ -80,6 +91,7 @@ pub struct Node {
     pub omni_paxos_durability: OmniPaxosDurability,
     pub datastore: ExampleDatastore,
     pub latest_decided_idx: u64,
+    pub latest_leader: u64
 }
 
 impl Node {
@@ -89,7 +101,8 @@ impl Node {
             // TODO Datastore and OmniPaxosDurability
             omni_paxos_durability:omni_durability,
             datastore: ExampleDatastore::new(),
-            latest_decided_idx:0
+            latest_decided_idx:0,
+            latest_leader:0
         };
     }
 
@@ -102,11 +115,12 @@ impl Node {
             Some(id)=> id,
             None=>return {}
         };
-        if leader_id == self.node_id {
+        if leader_id == self.node_id && self.latest_leader != self.node_id {
             self.apply_replicated_txns();
-        } else {
+        } else if self.latest_leader == self.node_id && leader_id != self.node_id {
             self.rollback_unreplicated_txns();
         }
+        self.latest_leader= leader_id;
     }
 
     /// Apply the transactions that have been decided in OmniPaxos to the Datastore.
@@ -115,7 +129,7 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if current_idx > self.latest_decided_idx {
-            let decided_entries= self.omni_paxos_durability.omnipaxos.read_decided_suffix(self.latest_decided_idx).unwrap();
+            let decided_entries: Vec<LogEntry<OmniLogEntry>>= self.omni_paxos_durability.omnipaxos.read_decided_suffix(self.latest_decided_idx).unwrap();
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
             self.advance_replicated_durability_offset().unwrap();
