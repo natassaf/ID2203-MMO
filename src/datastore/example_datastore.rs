@@ -131,6 +131,7 @@ impl CommittedState {
         &mut self,
         tx_offset: super::TxOffset,
     ) -> Result<(), super::error::DatastoreError> {
+
         for (k, tx_diff) in &mut self.committed_diff {
             while !tx_diff.history.is_empty() {
                 // TODO: This is all a bit silly.
@@ -151,6 +152,7 @@ impl CommittedState {
                 }
             }
         }
+
         self.committed_diff
             .retain(|_, tx_diff| !tx_diff.history.is_empty());
         self.replicated_tx_offset = Some(tx_offset);
