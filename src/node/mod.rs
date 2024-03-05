@@ -351,16 +351,31 @@ mod tests {
 
         // kill leader
         leader_join_handle.abort();
+        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 10);
+
         nodes.remove(&leader_id);
         let alive_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
         println!("leader killed {:?}", leader_id);
         println!("alive servers: {:?}", alive_servers);
         // get an alive node
-        // let (first_server, _) = alive_servers.get(&0).unwrap();
- 
+        let (alive_server, handler) = nodes.get(alive_servers[0]).unwrap();
 
+        let new_leader_id = alive_server.lock().unwrap().omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
+        println!("new leader id {:?}", new_leader_id);
+        assert_ne!(new_leader_id, leader_id);
+        
+        let (new_leader,_) = nodes.get(&new_leader_id).unwrap();
+        
+        // check that the last replicated tx of the new leader is correct
+        let last_replicated_tx = new_leader
+        .lock()
+        .unwrap()
+        .begin_tx(DurabilityLevel::Replicated);
 
-        // TODO: Implement the test case
+        assert_eq!(
+            last_replicated_tx.get(&"foo".to_string()),
+            Some("bar".to_string())
+        );
 
         runtime.shutdown_background();
     }
