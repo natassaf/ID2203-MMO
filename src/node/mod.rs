@@ -29,7 +29,7 @@ pub const TICK_PERIOD: Duration = Duration::from_millis(10);
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(1);
 pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
 pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
-
+pub const UPDATE_DB_PERIOD: Duration = Duration::from_millis(10);
 
 type OmniPaxosKV = OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>;
 
@@ -62,7 +62,7 @@ impl NodeRunner {
     pub async fn run(&mut self) {
         let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
         let mut tick_interval = time::interval(TICK_PERIOD);
-        let mut update_db_tick_interval = time::interval(WAIT_DECIDED_TIMEOUT );
+        let mut update_db_tick_interval = time::interval(UPDATE_DB_PERIOD );
         loop {
             tokio::select! {
                 biased;
@@ -129,10 +129,12 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if current_idx > self.latest_decided_idx {
+            println!("node_id {:?} applies replicated txns", self.node_id);
             let decided_entries= self.omni_paxos_durability.iter_starting_from_offset(TxOffset(self.latest_decided_idx));
+            
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
-           match self.advance_replicated_durability_offset(){
+            match self.advance_replicated_durability_offset(){
                 Ok(()) => (),
                 Err(e) => println!("Error advancing durability offset: {:?}", e)
            };
@@ -147,8 +149,15 @@ impl Node {
                 for insert in insert_list.inserts.iter() {
                     let mut tx = self.datastore.begin_mut_tx();
                     let row = example_datastore::deserialize_example_row(&insert.0).unwrap();
+                    println!("Data appended from omnipaxos to datastore: {:?}, {:?}", row.key, row.value);
                     tx.set(row.key, row.value);
                     self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
+                    let current_offset = self.datastore.get_cur_offset();
+                    let repl_offset = self.datastore.get_replicated_offset();
+                    println!("datastore current offset {:?}", current_offset);
+                    println!("datastore repl offset {:?}", repl_offset);
+
+
                 }
             }
         }
@@ -183,15 +192,10 @@ impl Node {
     fn advance_replicated_durability_offset(
         &self,
     ) -> Result<(), crate::datastore::error::DatastoreError> {
-     let result = self.datastore.get_replicated_offset();
-       match result {
-           Some(offset) => {
-            self.datastore.advance_replicated_durability_offset(offset)
-        },
-           None => {
-            self.datastore.advance_replicated_durability_offset(TxOffset(0))
-        },
-       }
+        let durable_tx_offset = self.omni_paxos_durability.get_durable_tx_offset();
+
+        self.datastore.advance_replicated_durability_offset(durable_tx_offset)
+
     }
     
     fn rollback_unreplicated_txns(&mut self) {
@@ -311,8 +315,53 @@ mod tests {
 
     #[tokio::test]
     async fn test_kill_leader_and_elect_new_leader() {
+        // 2. Find the leader and commit a transaction. 
+        //Kill the leader and show that another node will 
+        //be elected and that the replicated state is still correct.
+
         let mut runtime = create_runtime();
-        let nodes = spawn_nodes(&mut runtime);
+        let mut nodes = spawn_nodes(&mut runtime);
+
+
+        // wait for leader to be elected...
+        std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
+        let (first_server, _) = nodes.get(&1).unwrap();
+        let leader_id = first_server
+            .lock()
+            .unwrap()
+            .omni_paxos_durability.omnipaxos
+            .get_current_leader()
+            .expect("Failed to get leader");
+
+        let (leader_server, leader_join_handle) = nodes.get(&leader_id).unwrap();
+
+        //add a mutable transaction to the leader
+        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
+        tx.set("foo".to_string(), "bar".to_string());
+        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
+        let last_replicated_tx = leader_server
+            .lock()
+            .unwrap()
+            .begin_tx(DurabilityLevel::Replicated);
+        
+        // check that the transaction was replicated in leader
+        assert_eq!(
+            last_replicated_tx.get(&"foo".to_string()),
+            Some("bar".to_string())
+        );
+
+        // kill leader
+        leader_join_handle.abort();
+        nodes.remove(&leader_id);
+        let alive_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+        println!("leader killed {:?}", leader_id);
+        println!("alive servers: {:?}", alive_servers);
+        // get an alive node
+        // let (first_server, _) = alive_servers.get(&0).unwrap();
+ 
+
 
         // TODO: Implement the test case
 
@@ -397,7 +446,8 @@ mod tests {
 
         let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
         tx.set("red".to_string(), "blue".to_string());
-        let _result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
 
         // wait for the entries to be decided...
         println!("Trasaction committed");
