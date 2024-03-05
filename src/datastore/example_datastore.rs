@@ -18,9 +18,9 @@ type SharedWriteGuard<T> = ArcRwLockWriteGuard<RawRwLock, T>;
 type SharedReadGuard<T> = ArcRwLockReadGuard<RawRwLock, T>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ExampleRow {
-    key: String,
-    value: String,
+pub struct ExampleRow {
+    pub key: String,
+    pub value: String,
 }
 
 use std::io::{self, Read, Write};
@@ -40,7 +40,7 @@ fn serialize_example_row(row: &ExampleRow) -> io::Result<Vec<u8>> {
 }
 
 // Deserialize an ExampleRow from a slice of bytes
-fn deserialize_example_row(bytes: &[u8]) -> io::Result<ExampleRow> {
+pub fn deserialize_example_row(bytes: &[u8]) -> io::Result<ExampleRow> {
     let mut cursor = io::Cursor::new(bytes);
 
     // Deserialize `key`
@@ -132,7 +132,6 @@ impl CommittedState {
         tx_offset: super::TxOffset,
     ) -> Result<(), super::error::DatastoreError> {
         for (k, tx_diff) in &mut self.committed_diff {
-
             while !tx_diff.history.is_empty() {
                 // TODO: This is all a bit silly.
                 // This should binary search to the latest
@@ -196,7 +195,6 @@ impl MutTx {
     }
 
     pub fn set(&mut self, key: String, value: String) {
-        println!("Va: {:?}", value);
         self.diff.insert(key, Diff::Insert(value));
     }
 
@@ -244,7 +242,6 @@ impl Datastore<String, String> for ExampleDatastore {
         let offset = tx.committed_state.next_tx_offset;
         let mut inserts = Vec::new();
         let mut deletes = Vec::new();
-        println!("tx.diff {:?}", tx.diff);
         for (key, diff) in tx.diff {
             match tx.committed_state.committed_diff.get_mut(&key) {
                 Some(tx_diff) => tx_diff.insert_diff(offset, diff.clone()),

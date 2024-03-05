@@ -1,12 +1,15 @@
 use crate::datastore::error::DatastoreError;
+use crate::datastore::example_datastore;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::example_datastore::MutTx;
+use crate::datastore::tx_data::RowData;
 use crate::datastore::tx_data::TxData;
 use crate::datastore::tx_data::TxResult;
 use crate::datastore::Datastore;
 use crate::datastore::TxOffset;
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::omnipaxos_durability::OmniLogEntry;
+use crate::durability::DurabilityLayer;
 use crate::durability::DurabilityLevel;
 use std::collections::HashMap;
 use std::f32::consts::E;
@@ -126,7 +129,7 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if current_idx > self.latest_decided_idx {
-            let decided_entries: Vec<LogEntry<OmniLogEntry>>= self.omni_paxos_durability.omnipaxos.read_decided_suffix(self.latest_decided_idx).unwrap();
+            let decided_entries= self.omni_paxos_durability.iter_starting_from_offset(TxOffset(self.latest_decided_idx));
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
            match self.advance_replicated_durability_offset(){
@@ -136,30 +139,17 @@ impl Node {
         }
     }
 
-    fn log_entry_to_db_entry(&self, tx_offset:&TxOffset, tx_data:&TxData)->MutTx{
-        let mut tx = self.datastore.begin_mut_tx();
-        let tx_offset_str = tx_offset.0.to_string();
-            
-        let mut bytes = Vec::new();
-        let _ = tx_data.serialize(&mut bytes).unwrap();
-        let tx_data_str = match String::from_utf8(bytes.to_vec()) {
-            Ok(s) => s,
-            Err(e) => panic!("Error converting byte array to string: {:?}", e),
-        };
-        println!("{}", tx_data_str); // Output: Hello
-
-        tx.set(tx_offset_str, tx_data_str);
-        tx
-    }
-
-    fn update_database(&self, decided_entries: Vec<LogEntry<OmniLogEntry>>) {
-        for entry in decided_entries.iter() {
-            match entry {
-                LogEntry::Decided(entry) => {
-                    let tx = self.log_entry_to_db_entry(&entry.tx_offset, &entry.tx_data);
+    fn update_database(&self, decided_entries:Box<dyn Iterator<Item = (TxOffset, TxData)>>) {
+        for (tx_offset, tx_data) in decided_entries.into_iter() {
+            // let tx = self.log_entry_to_db_entry(&tx_offset, &tx_data);
+                    
+            for insert_list in tx_data.inserts.iter() {
+                for insert in insert_list.inserts.iter() {
+                    let mut tx = self.datastore.begin_mut_tx();
+                    let row = example_datastore::deserialize_example_row(&insert.0).unwrap();
+                    tx.set(row.key, row.value);
                     self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
                 }
-                _ => {}
             }
         }
     }
@@ -315,9 +305,7 @@ mod tests {
         let node1_obj = node1.0.lock().unwrap();
         // TODO: Implement the test case
         let leader_id = node1_obj.omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
-        
-        
-
+    
         runtime.shutdown_background();
     }
 
@@ -413,7 +401,7 @@ mod tests {
 
         // wait for the entries to be decided...
         println!("Trasaction committed");
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 4);
+        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
         let last_replicated_tx = leader_server
             .lock()
             .unwrap()
