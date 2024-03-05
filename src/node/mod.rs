@@ -132,17 +132,14 @@ impl Node {
             let decided_entries= self.omni_paxos_durability.iter_starting_from_offset(TxOffset(self.latest_decided_idx));
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
-           match self.advance_replicated_durability_offset(){
-                Ok(()) => (),
-                Err(e) => println!("Error advancing durability offset: {:?}", e)
-           };
+          
         }
+         self.advance_replicated_durability_offset();
     }
 
     fn update_database(&self, decided_entries:Box<dyn Iterator<Item = (TxOffset, TxData)>>) {
         for (tx_offset, tx_data) in decided_entries.into_iter() {
-            // let tx = self.log_entry_to_db_entry(&tx_offset, &tx_data);
-                    
+            //let tx = self.log_entry_to_db_entry(&tx_offset, &tx_data);
             for insert_list in tx_data.inserts.iter() {
                 for insert in insert_list.inserts.iter() {
                     let mut tx = self.datastore.begin_mut_tx();
@@ -182,16 +179,11 @@ impl Node {
 
     fn advance_replicated_durability_offset(
         &self,
-    ) -> Result<(), crate::datastore::error::DatastoreError> {
-     let result = self.datastore.get_replicated_offset();
-       match result {
-           Some(offset) => {
-            self.datastore.advance_replicated_durability_offset(offset)
-        },
-           None => {
-            self.datastore.advance_replicated_durability_offset(TxOffset(0))
-        },
-       }
+    ){
+     let result: TxOffset = TxOffset(self.latest_decided_idx);
+         
+        let   _ =  self.datastore.advance_replicated_durability_offset(result);
+
     }
     
     fn rollback_unreplicated_txns(&mut self) {
@@ -397,15 +389,17 @@ mod tests {
 
         let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
         tx.set("red".to_string(), "blue".to_string());
-        let _result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        let result: TxResult = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
 
         // wait for the entries to be decided...
         println!("Trasaction committed");
         std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
-        let last_replicated_tx = leader_server
+        let last_replicated_tx: example_datastore::Tx = leader_server
             .lock()
             .unwrap()
             .begin_tx(DurabilityLevel::Replicated);
+        let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
         // check that the transaction was replicated in leader
         assert_eq!(
             last_replicated_tx.get(&"red".to_string()),
@@ -423,5 +417,7 @@ mod tests {
             Some("blue".to_string())
         );
         leader_server.lock().unwrap().release_tx(last_replicated_tx);
+        runtime.shutdown_background();
+ 
     }
 }
