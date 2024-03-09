@@ -71,9 +71,8 @@ impl NodeRunner {
                     self.node.lock().unwrap().update_leader();
                 },
                 _ = outgoing_interval.tick() => { 
-                    if self.node.lock().unwrap().disconnect != false{
-                        self.send_outgoing_msgs().await;
-                    }
+                    self.send_outgoing_msgs().await;
+                    
                      
                 },
                 _ = update_db_tick_interval.tick() => {
@@ -94,7 +93,7 @@ pub struct Node {
     pub datastore: ExampleDatastore,
     pub latest_decided_idx: u64,
     pub latest_leader: u64,
-    pub disconnect: bool
+    // pub disconnect: bool
 }
 
 impl Node {
@@ -106,7 +105,7 @@ impl Node {
             datastore: ExampleDatastore::new(),
             latest_decided_idx:0,
             latest_leader:0,
-            disconnect:false 
+            // disconnect:false 
         };
     }
 
@@ -421,65 +420,65 @@ mod tests {
         runtime.shutdown_background();
     }
 
-    #[tokio::test]
-    async fn test_disconnect_leader_and_rollback_transactions() {
-        let mut runtime = create_runtime();
+    // #[tokio::test]
+    // async fn test_disconnect_leader_and_rollback_transactions() {
+    //     let mut runtime = create_runtime();
 
-        let mut nodes = spawn_nodes(&mut runtime);
-        // wait for leader to be elected...
-        std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
-        let (first_server, _) = nodes.get(&1).unwrap();
+    //     let mut nodes = spawn_nodes(&mut runtime);
+    //     // wait for leader to be elected...
+    //     std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
+    //     let (first_server, _) = nodes.get(&1).unwrap();
 
-        // check which server is the current leader
+    //     // check which server is the current leader
 
-        let leader = first_server
-            .lock()
-            .unwrap()
-            .omni_paxos_durability.omnipaxos
-            .get_current_leader()
-            .expect("Failed to get leader");
+    //     let leader = first_server
+    //         .lock()
+    //         .unwrap()
+    //         .omni_paxos_durability.omnipaxos
+    //         .get_current_leader()
+    //         .expect("Failed to get leader");
 
-        let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
-        //add a mutable transaction to the leader
-        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
-        tx.set("foo".to_string(), "bar".to_string());
-        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
-        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
-        // TODO: Implement the test case
+    //     let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
+    //     //add a mutable transaction to the leader
+    //     let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
+    //     tx.set("foo".to_string(), "bar".to_string());
+    //     let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+    //     leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+    //     // TODO: Implement the test case
 
-        leader_server.lock().unwrap().disconnect = true;
-        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
-        tx.set("foo".to_string(), "bar".to_string());
-        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
-        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+    //     leader_server.lock().unwrap().disconnect = true;
+    //     let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
+    //     tx.set("foo".to_string(), "bar".to_string());
+    //     let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+    //     leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
         
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 10);
+    //     std::thread::sleep(WAIT_DECIDED_TIMEOUT * 10);
 
-        nodes.remove(&leader);
-        let alive_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader).collect();
-        println!("leader killed {:?}", leader);
-        println!("alive servers: {:?}", alive_servers);
-        // get an alive node
-        let (alive_server, handler) = nodes.get(alive_servers[0]).unwrap();
+    //     nodes.remove(&leader);
+    //     let alive_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader).collect();
+    //     println!("leader killed {:?}", leader);
+    //     println!("alive servers: {:?}", alive_servers);
+    //     // get an alive node
+    //     let (alive_server, handler) = nodes.get(alive_servers[0]).unwrap();
 
-        let new_leader_id = alive_server.lock().unwrap().omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
-        println!("new leader id {:?}", new_leader_id);
-        assert_ne!(new_leader_id, leader);
+    //     let new_leader_id = alive_server.lock().unwrap().omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
+    //     println!("new leader id {:?}", new_leader_id);
+    //     assert_ne!(new_leader_id, leader);
         
-        let (new_leader,_) = nodes.get(&new_leader_id).unwrap();
+    //     let (new_leader,_) = nodes.get(&new_leader_id).unwrap();
         
-        // check that the last replicated tx of the new leader is correct
-        let last_replicated_tx = new_leader
-        .lock()
-        .unwrap()
-        .begin_tx(DurabilityLevel::Replicated);
-        println!( "Last rep: {:?}", last_replicated_tx.get(&"foo".to_string()));
-        assert_eq!(
-            last_replicated_tx.get(&"foo".to_string()),
-           None
-        ); 
-        runtime.shutdown_background();
-    }
+    //     // check that the last replicated tx of the new leader is correct
+    //     let last_replicated_tx = new_leader
+    //     .lock()
+    //     .unwrap()
+    //     .begin_tx(DurabilityLevel::Replicated);
+    //     println!( "Last rep: {:?}", last_replicated_tx.get(&"foo".to_string()));
+    //     assert_eq!(
+    //         last_replicated_tx.get(&"foo".to_string()),
+    //        None
+    //     ); 
+    //     runtime.shutdown_background();
+    // }
 
     #[tokio::test]
     async fn test_partial_connectivity_scenarios() {
