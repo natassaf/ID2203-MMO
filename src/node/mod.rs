@@ -147,7 +147,10 @@ impl Node {
             let decided_entries= self.omni_paxos_durability.iter_starting_from_offset(TxOffset(self.latest_decided_idx));
             
             self.update_database(decided_entries);
-            self.latest_decided_idx = current_idx;
+            //if self.latest_leader != self.node_id {
+                self.latest_decided_idx = current_idx;
+
+   //         }
             self.advance_replicated_durability_offset();
         }
     }
@@ -204,6 +207,7 @@ impl Node {
         &mut self,
         tx: <ExampleDatastore as Datastore<String, String>>::MutTx,
     ) -> Result<TxResult, DatastoreError> {
+        // self.latest_decided_idx +=1 ;
         self.datastore.commit_mut_tx(tx)
     }
 
@@ -386,7 +390,9 @@ mod tests {
         let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
         tx.set("foo".to_string(), "bar".to_string());
         let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+       
         leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+
         std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
         let last_replicated_tx = leader_server
             .lock()
@@ -434,7 +440,7 @@ mod tests {
     async fn test_disconnect_leader_and_rollback_transactions() {
         // initialize
         let mut runtime = create_runtime();
-        let mut nodes = spawn_nodes(&mut runtime);
+        let nodes = spawn_nodes(&mut runtime);
         std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
 
         // get leader
@@ -453,6 +459,7 @@ mod tests {
 
         // leader commits entry but doesn't append in omnipaxos
         let _result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().latest_decided_idx += 1; 
         // leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
         
         std::thread::sleep(WAIT_DECIDED_TIMEOUT * 2);
