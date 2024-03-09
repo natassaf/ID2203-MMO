@@ -1,8 +1,6 @@
 use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore;
 use crate::datastore::example_datastore::ExampleDatastore;
-use crate::datastore::example_datastore::MutTx;
-use crate::datastore::tx_data::RowData;
 use crate::datastore::tx_data::TxData;
 use crate::datastore::tx_data::TxResult;
 use crate::datastore::Datastore;
@@ -12,12 +10,9 @@ use crate::durability::omnipaxos_durability::OmniLogEntry;
 use crate::durability::DurabilityLayer;
 use crate::durability::DurabilityLevel;
 use std::collections::HashMap;
-use std::f32::consts::E;
-use std::io::Bytes;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use omnipaxos::messages::Message;
-use omnipaxos::util::LogEntry;
 use omnipaxos::util::NodeId;
 use omnipaxos::OmniPaxos;
 use omnipaxos_storage::memory_storage::MemoryStorage;
@@ -30,8 +25,6 @@ pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(1);
 pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
 pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
 pub const UPDATE_DB_PERIOD: Duration = Duration::from_millis(10);
-
-type OmniPaxosKV = OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>;
 
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
@@ -51,11 +44,11 @@ impl NodeRunner {
             .outgoing_messages();
         for msg in messages {
             let receiver = msg.get_receiver();
-            if !self.node.lock().unwrap().disconnected_nodes.contains(&receiver){
                 let channel = self
                 .outgoing
                 .get_mut(&receiver)
                 .expect("No channel for receiver");
+            if !self.node.lock().unwrap().disconnected_nodes.contains(&receiver){
                 let _ = channel.send(msg).await;
             }
         }
@@ -81,7 +74,10 @@ impl NodeRunner {
                     self.node.lock().unwrap().apply_replicated_txns();
                 },
                 Some(msg) = self.incoming.recv() => {
-                            self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
+                    let receiver = msg.get_receiver();
+                    // if !self.node.lock().unwrap().disconnected_nodes.contains(&receiver){
+                    self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
+                    // }
                 
                 }
             }
@@ -248,7 +244,7 @@ mod tests {
 
     const SERVERS: [NodeId; 3] = [1, 2, 3];
 
-    fn get_example_transaction(datastore: &ExampleDatastore)->MutTx{
+    fn get_example_transaction(datastore: &ExampleDatastore)->example_datastore::MutTx{
         let mut tx1 = datastore.begin_mut_tx();
         tx1.set("foo".to_string(), "bar".to_string());
         tx1
@@ -499,56 +495,62 @@ mod tests {
         runtime.shutdown_background();
     }
 
-//     #[tokio::test]
-//     async fn test_partial_connectivity_scenarios() {
-//         let mut runtime = create_runtime();
-//         let nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = spawn_nodes(&mut runtime);
+    #[tokio::test]
+    async fn test_partial_connectivity_scenarios() {
+        let mut runtime = create_runtime();
+        let nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = spawn_nodes(&mut runtime);
 
-//         // wait for leader to be elected...
-//         std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
-//         let (first_server, _) = nodes.get(&1).unwrap();
+        // wait for leader to be elected...
+        std::thread::sleep(Duration::from_secs(1));
+        let (first_server, _) = nodes.get(&1).unwrap();
 
-//         // ---------------------- chained scenario-----------------
+        // ---------------------- chained scenario-----------------
 
-//         let leader_id = first_server
-//             .lock()
-//             .unwrap()
-//             .omni_paxos_durability.omnipaxos
-//             .get_current_leader()
-//             .expect("Failed to get leader");
+        let leader_id = first_server
+            .lock()
+            .unwrap()
+            .omni_paxos_durability.omnipaxos
+            .get_current_leader()
+            .expect("Failed to get leader");
 
-//         let (leader_server,_ )= nodes.get(&leader_id).unwrap();
-//         let following_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+        let (leader_server,_ )= nodes.get(&leader_id).unwrap();
+        println!("leader_server: {:?}", leader_id);
 
-//         let follower_id: u64 = *following_servers[0];
-//         let (follower_server, _) = nodes.get(&follower_id).unwrap();
-//         follower_server.lock().unwrap().disconnect(leader_id);
-//         leader_server.lock().unwrap().disconnect(follower_id);
-//         std::thread::sleep(WAIT_LEADER_TIMEOUT * 8);
+        let following_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+
+        let follower_id: u64 = *following_servers[0];
+        let (follower_server, _) = nodes.get(&follower_id).unwrap();
+        // follower_server.lock().unwrap().disconnect(leader_id);
+        leader_server.lock().unwrap().disconnect(follower_id);
+        std::thread::sleep(Duration::from_secs(3));
         
-//         let new_leader_id = follower_server
-//         .lock()
-//         .unwrap()
-//         .omni_paxos_durability.omnipaxos
-//         .get_current_leader()
-//         .expect("Failed to get leader"); 
+        let new_leader_id = follower_server
+        .lock()
+        .unwrap()
+        .omni_paxos_durability.omnipaxos
+        .get_current_leader()
+        .expect("Failed to get leader"); 
 
-//         assert_eq!(new_leader_id,follower_id);
+        println!("new leader_server: {:?}", new_leader_id);
 
-//         std::thread::sleep(WAIT_LEADER_TIMEOUT * 8);
+        assert_eq!(new_leader_id,follower_id);
+
+        std::thread::sleep(Duration::from_secs(1));
+
         
-//         let new_leader_id = follower_server
-//         .lock()
-//         .unwrap()
-//         .omni_paxos_durability.omnipaxos
-//         .get_current_leader()
-//         .expect("Failed to get leader"); 
+        let new_leader_id = follower_server
+        .lock()
+        .unwrap()
+        .omni_paxos_durability.omnipaxos
+        .get_current_leader()
+        .expect("Failed to get leader"); 
 
-//         assert_eq!(new_leader_id,follower_id);
-//         //----------------------------------- quarum-loss-scenairo---------------------
+        assert_eq!(new_leader_id,follower_id);
+        //----------------------------------- quarum-loss-scenairo---------------------
 
-//         runtime.shutdown_background();
-//     }
+        runtime.shutdown_background();
+    }
+
     #[tokio::test]
     async fn test_commit_transactions() {
         let mut runtime = create_runtime();
