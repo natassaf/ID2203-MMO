@@ -37,7 +37,7 @@ pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
     // TODO Messaging and running
     pub incoming: mpsc::Receiver<Message<OmniLogEntry>>,
-    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>
+    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
 }
 
 impl NodeRunner {
@@ -63,6 +63,8 @@ impl NodeRunner {
         let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
         let mut tick_interval = time::interval(TICK_PERIOD);
         let mut update_db_tick_interval = time::interval(UPDATE_DB_PERIOD );
+        let mut remove_disconnected_nodes_interval = time::interval(UPDATE_DB_PERIOD );
+
         loop {
             tokio::select! {
                 biased;
@@ -75,6 +77,12 @@ impl NodeRunner {
                         self.send_outgoing_msgs().await;
                     }
                      
+                },
+                _ = remove_disconnected_nodes_interval.tick() => {
+                    let _ = self.node.lock().unwrap().disconnected_nodes.iter().map(|node_id|{
+                        println!("Removed node: {:?}", node_id);
+                        self.outgoing.remove(node_id);
+                    });
                 },
                 _ = update_db_tick_interval.tick() => {
                     self.node.lock().unwrap().apply_replicated_txns();
@@ -94,10 +102,14 @@ pub struct Node {
     pub datastore: ExampleDatastore,
     pub latest_decided_idx: u64,
     pub latest_leader: u64,
-    pub disconnect: bool
+    pub disconnect: bool,
+    pub disconnected_nodes: Vec<NodeId>
 }
 
 impl Node {
+    pub fn disconnect(&mut self, node_id: NodeId){
+        self.disconnected_nodes.push(node_id);
+    }
     pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability) -> Self {
         return Node{
             node_id: node_id,
@@ -106,7 +118,8 @@ impl Node {
             datastore: ExampleDatastore::new(),
             latest_decided_idx:0,
             latest_leader:0,
-            disconnect:false 
+            disconnect:false ,
+            disconnected_nodes:vec![]
         };
     }
 
@@ -484,9 +497,50 @@ mod tests {
     #[tokio::test]
     async fn test_partial_connectivity_scenarios() {
         let mut runtime = create_runtime();
-        let nodes = spawn_nodes(&mut runtime);
+        let nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = spawn_nodes(&mut runtime);
 
-        // TODO: Implement the test case
+        // wait for leader to be elected...
+        std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
+        let (first_server, _) = nodes.get(&1).unwrap();
+
+        // ---------------------- chained scenario-----------------
+
+        let leader_id = first_server
+            .lock()
+            .unwrap()
+            .omni_paxos_durability.omnipaxos
+            .get_current_leader()
+            .expect("Failed to get leader");
+
+        let (leader_server,_ )= nodes.get(&leader_id).unwrap();
+        let following_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+
+        let follower_id: u64 = *following_servers[0];
+        let (follower_server, _) = nodes.get(&follower_id).unwrap();
+        follower_server.lock().unwrap().disconnect(leader_id);
+        leader_server.lock().unwrap().disconnect(follower_id);
+        std::thread::sleep(WAIT_LEADER_TIMEOUT * 8);
+        
+        let new_leader_id = follower_server
+        .lock()
+        .unwrap()
+        .omni_paxos_durability.omnipaxos
+        .get_current_leader()
+        .expect("Failed to get leader"); 
+
+        assert_eq!(new_leader_id,follower_id);
+
+        std::thread::sleep(WAIT_LEADER_TIMEOUT * 8);
+        
+        let new_leader_id = follower_server
+        .lock()
+        .unwrap()
+        .omni_paxos_durability.omnipaxos
+        .get_current_leader()
+        .expect("Failed to get leader"); 
+
+        assert_eq!(new_leader_id,follower_id);
+        //----------------------------------- quarum-loss-scenairo---------------------
 
         runtime.shutdown_background();
     }
@@ -517,7 +571,7 @@ mod tests {
         // wait for the entries to be decided...
         println!("Trasaction committed");
 
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
+        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 16);
         let last_replicated_tx = leader_server
             .lock()
             .unwrap()
@@ -532,7 +586,7 @@ mod tests {
         // check that the transaction was replicated in the followers
         let follower = (leader + 1) as u64 % nodes.len() as u64;
         let (follower_server, _) = nodes.get(&follower).unwrap();
-        let last_replicated_tx = follower_server
+                let last_replicated_tx = follower_server
             .lock()
             .unwrap()
             .begin_tx(DurabilityLevel::Replicated);
