@@ -527,10 +527,12 @@ mod tests {
 
         let follower_id: u64 = *following_servers[0];
         let (follower_server, _) = nodes.get(&follower_id).unwrap();
-        // follower_server.lock().unwrap().disconnect(leader_id);
-        leader_server.lock().unwrap().disconnect(follower_id);
+
+        // Leader is connected to 4 nodes. I disconnect 3 nodes and leader changes
+
+        // Disconnect 1 follower and assert that leader doesn't change
+        leader_server.lock().unwrap().disconnect(*following_servers[0]);
         std::thread::sleep(Duration::from_secs(3));
-        
         let new_leader_id = follower_server
         .lock()
         .unwrap()
@@ -538,13 +540,12 @@ mod tests {
         .get_current_leader()
         .expect("Failed to get leader"); 
 
-        println!("new leader_server: {:?}", new_leader_id);
+        assert_ne!(new_leader_id, leader_id);
+        println!("first assert passed");
 
-        assert_eq!(new_leader_id,follower_id);
-
-        std::thread::sleep(Duration::from_secs(1));
-
-        
+        // Disconnect 2 followers and assert that leader doesn't change
+        leader_server.lock().unwrap().disconnect(*following_servers[1]);
+        std::thread::sleep(Duration::from_secs(3));
         let new_leader_id = follower_server
         .lock()
         .unwrap()
@@ -552,7 +553,22 @@ mod tests {
         .get_current_leader()
         .expect("Failed to get leader"); 
 
-        assert_eq!(new_leader_id,follower_id);
+        assert_eq!(new_leader_id, leader_id);
+
+        // Disconnect 3 followers and assert that leader changes!
+        leader_server.lock().unwrap().disconnect(*following_servers[2]);
+        std::thread::sleep(Duration::from_secs(3));
+        let new_leader_id = follower_server
+        .lock()
+        .unwrap()
+        .omni_paxos_durability.omnipaxos
+        .get_current_leader()
+        .expect("Failed to get leader"); 
+        leader_server.lock().unwrap().disconnect(*following_servers[2]);
+        std::thread::sleep(Duration::from_secs(3));
+
+        assert_ne!(new_leader_id, leader_id);
+
         //----------------------------------- quarum-loss-scenairo---------------------
 
         runtime.shutdown_background();
