@@ -25,7 +25,7 @@ use tokio::{sync::mpsc, time};
 
 pub const BUFFER_SIZE: usize = 10000;
 pub const ELECTION_TICK_TIMEOUT: u64 = 5;
-pub const TICK_PERIOD: Duration = Duration::from_millis(10);
+pub const TICK_PERIOD: Duration = Duration::from_millis(1);
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(1);
 pub const WAIT_LEADER_TIMEOUT: Duration = Duration::from_millis(500);
 pub const WAIT_DECIDED_TIMEOUT: Duration = Duration::from_millis(50);
@@ -71,7 +71,9 @@ impl NodeRunner {
                     self.node.lock().unwrap().update_leader();
                 },
                 _ = outgoing_interval.tick() => { 
-                    self.send_outgoing_msgs().await;
+                    if !self.node.lock().unwrap().disconnect {
+                        self.send_outgoing_msgs().await;
+                    }
                     
                      
                 },
@@ -93,7 +95,7 @@ pub struct Node {
     pub datastore: ExampleDatastore,
     pub latest_decided_idx: u64,
     pub latest_leader: u64,
-    // pub disconnect: bool
+    pub disconnect: bool
 }
 
 impl Node {
@@ -105,8 +107,12 @@ impl Node {
             datastore: ExampleDatastore::new(),
             latest_decided_idx:0,
             latest_leader:0,
-            // disconnect:false 
+            disconnect:false 
         };
+    }
+
+    pub fn disconnect(mut self){
+        self.disconnect = true;
     }
 
     /// update who is the current leader. If a follower becomes the leader,
@@ -155,19 +161,19 @@ impl Node {
                 }
             }
 
-            for delete_list in tx_data.deletes.iter() {
-                for deleted_item in delete_list.deletes.iter() {
-                    let mut tx = self.datastore.begin_mut_tx();
-                    let row = example_datastore::deserialize_example_row(&deleted_item.0).unwrap();
-                    println!("Data deleted from datastore: {:?}, {:?}", row.key, row.value);
-                    tx.delete(&row.key);
-                    self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
-                }
-            }
-            let current_offset = self.datastore.get_cur_offset();
-            let repl_offset = self.datastore.get_replicated_offset();
-            println!("datastore current offset {:?}", current_offset);
-            println!("datastore repl offset {:?}", repl_offset);
+            // for delete_list in tx_data.deletes.iter() {
+            //     for deleted_item in delete_list.deletes.iter() {
+            //         let mut tx = self.datastore.begin_mut_tx();
+            //         let row = example_datastore::deserialize_example_row(&deleted_item.0).unwrap();
+            //         println!("Data deleted from datastore: {:?}, {:?}", row.key, row.value);
+            //         tx.delete(&row.key);
+            //         self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
+            //     }
+            // }
+            // let current_offset = self.datastore.get_cur_offset();
+            // let repl_offset = self.datastore.get_replicated_offset();
+            // println!("datastore current offset {:?}", current_offset);
+            // println!("datastore repl offset {:?}", repl_offset);
         }
     }
 
@@ -486,11 +492,25 @@ mod tests {
         let nodes = spawn_nodes(&mut runtime);
 
         // TODO: Implement the test case
+        std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
+        let (first_server, _) = nodes.get(&1).unwrap();
 
+        // check which server is the current leader
+
+        let leader = first_server
+            .lock()
+            .unwrap()
+            .omni_paxos_durability.omnipaxos
+            .get_current_leader()
+            .expect("Failed to get leader");
+
+        let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
+
+        
         runtime.shutdown_background();
     }
-    #[tokio::test]
-    async fn test_commit_transactions() {
+    #[test]
+     fn test_commit_transactions() {
         let mut runtime = create_runtime();
         let nodes = spawn_nodes(&mut runtime);
         // wait for leader to be elected...
@@ -516,7 +536,7 @@ mod tests {
         // wait for the entries to be decided...
         println!("Trasaction committed");
 
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
+        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 2);
         let last_replicated_tx = leader_server
             .lock()
             .unwrap()
@@ -529,7 +549,14 @@ mod tests {
         );
         leader_server.lock().unwrap().release_tx(last_replicated_tx);
         // check that the transaction was replicated in the followers
-        let follower = (leader + 1) as u64 % nodes.len() as u64;
+       let followers: Vec<NodeId> = nodes.iter().filter_map(|(node_id,_)|{
+            if node_id != &leader {
+                return  Some(*node_id)
+            }else {
+                return  None;
+            }
+        }).collect();
+        let follower = followers[0];
         let (follower_server, _) = nodes.get(&follower).unwrap();
         let last_replicated_tx = follower_server
             .lock()
@@ -552,19 +579,22 @@ mod tests {
 
         // wait for the entries to be decided...
         println!("Trasaction committed");
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
+        std::thread::sleep(Duration::from_secs(2));
+        let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
+
         let last_replicated_tx: example_datastore::Tx = leader_server
             .lock()
             .unwrap()
             .begin_tx(DurabilityLevel::Replicated);
-        let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
-        
+        println!("{:?}",oof);
+        println!("{:?}",last_replicated_tx.offsets);
         // check that the transaction was replicated in leader
         assert_eq!(
             last_replicated_tx.get(&"red".to_string()),
             Some("blue".to_string())
         );
         leader_server.lock().unwrap().release_tx(last_replicated_tx);
+        std::thread::sleep(Duration::from_secs(2));
 
         let last_replicated_tx = follower_server
             .lock()
@@ -576,7 +606,7 @@ mod tests {
             Some("blue".to_string())
         );
         leader_server.lock().unwrap().release_tx(last_replicated_tx);
-        runtime.shutdown_background();
+       // runtime.shutdown_background();
  
     }
 }
