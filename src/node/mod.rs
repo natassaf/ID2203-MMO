@@ -143,13 +143,13 @@ impl Node {
             
             self.update_database(decided_entries);
             self.latest_decided_idx = current_idx;
-          
+            self.advance_replicated_durability_offset();
         }
-         self.advance_replicated_durability_offset();
     }
 
     fn update_database(&self, decided_entries:Box<dyn Iterator<Item = (TxOffset, TxData)>>) {
         for (tx_offset, tx_data) in decided_entries.into_iter() {
+            // println!("tx_offset {:?} ", tx_offset);
             //let tx = self.log_entry_to_db_entry(&tx_offset, &tx_data);
             for insert_list in tx_data.inserts.iter() {
                 for insert in insert_list.inserts.iter() {
@@ -161,15 +161,15 @@ impl Node {
                 }
             }
 
-            // for delete_list in tx_data.deletes.iter() {
-            //     for deleted_item in delete_list.deletes.iter() {
-            //         let mut tx = self.datastore.begin_mut_tx();
-            //         let row = example_datastore::deserialize_example_row(&deleted_item.0).unwrap();
-            //         println!("Data deleted from datastore: {:?}, {:?}", row.key, row.value);
-            //         tx.delete(&row.key);
-            //         self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
-            //     }
-            // }
+            for delete_list in tx_data.deletes.iter() {
+                for deleted_item in delete_list.deletes.iter() {
+                    let mut tx = self.datastore.begin_mut_tx();
+                    let row = example_datastore::deserialize_example_row(&deleted_item.0).unwrap();
+                    println!("Data deleted from datastore: {:?}, {:?}", row.key, row.value);
+                    tx.delete(&row.key);
+                    self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
+                }
+            }
             // let current_offset = self.datastore.get_cur_offset();
             // let repl_offset = self.datastore.get_replicated_offset();
             // println!("datastore current offset {:?}", current_offset);
@@ -587,7 +587,6 @@ mod tests {
             .unwrap()
             .begin_tx(DurabilityLevel::Replicated);
         println!("{:?}",oof);
-        println!("{:?}",last_replicated_tx.offsets);
         // check that the transaction was replicated in leader
         assert_eq!(
             last_replicated_tx.get(&"red".to_string()),
