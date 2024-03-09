@@ -246,7 +246,7 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
 
-    const SERVERS: [NodeId; 3] = [1, 2, 3];
+    const SERVERS: [NodeId; 5] = [1, 2, 3, 4, 5];
 
     fn get_example_transaction(datastore: &ExampleDatastore)->example_datastore::MutTx{
         let mut tx1 = datastore.begin_mut_tx();
@@ -540,8 +540,9 @@ mod tests {
         .get_current_leader()
         .expect("Failed to get leader"); 
 
-        assert_ne!(new_leader_id, leader_id);
-        println!("first assert passed");
+        println!("leader_server: {:?}", new_leader_id);
+
+        assert_eq!(new_leader_id, leader_id);
 
         // Disconnect 2 followers and assert that leader doesn't change
         leader_server.lock().unwrap().disconnect(*following_servers[1]);
@@ -554,10 +555,11 @@ mod tests {
         .expect("Failed to get leader"); 
 
         assert_eq!(new_leader_id, leader_id);
+        println!("leader_server: {:?}", new_leader_id);
 
         // Disconnect 3 followers and assert that leader changes!
         leader_server.lock().unwrap().disconnect(*following_servers[2]);
-        std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_secs(5));
         let new_leader_id = follower_server
         .lock()
         .unwrap()
@@ -566,6 +568,8 @@ mod tests {
         .expect("Failed to get leader"); 
         leader_server.lock().unwrap().disconnect(*following_servers[2]);
         std::thread::sleep(Duration::from_secs(3));
+
+        println!("leader_server: {:?}", new_leader_id);
 
         assert_ne!(new_leader_id, leader_id);
 
