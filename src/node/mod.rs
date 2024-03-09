@@ -51,11 +51,13 @@ impl NodeRunner {
             .outgoing_messages();
         for msg in messages {
             let receiver = msg.get_receiver();
-            let channel = self
+            if !self.node.lock().unwrap().disconnected_nodes.contains(&receiver){
+                let channel = self
                 .outgoing
                 .get_mut(&receiver)
                 .expect("No channel for receiver");
-            let _ = channel.send(msg).await;
+                let _ = channel.send(msg).await;
+            }
         }
     }
 
@@ -74,12 +76,6 @@ impl NodeRunner {
                 },
                 _ = outgoing_interval.tick() => { 
                         self.send_outgoing_msgs().await;
-                },
-                _ = remove_disconnected_nodes_interval.tick() => {
-                    let _res:Vec<()> = self.node.lock().unwrap().disconnected_nodes.iter().map(|node_id|{
-                        println!("Removed node: {:?}", node_id);
-                        self.outgoing.remove(node_id);
-                    }).collect();
                 },
                 _ = update_db_tick_interval.tick() => {
                     self.node.lock().unwrap().apply_replicated_txns();
@@ -106,6 +102,12 @@ impl Node {
     pub fn disconnect(&mut self, node_id: NodeId){
         self.disconnected_nodes.push(node_id);
     }
+
+    pub fn reconnect(&mut self, node_id: NodeId){
+        self.disconnected_nodes = self.disconnected_nodes.iter().filter_map(|&id| if id != node_id{ Some(id)} else {None} ).collect();
+        
+    }
+
     pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability) -> Self {
         return Node{
             node_id: node_id,
@@ -448,7 +450,9 @@ mod tests {
         let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
         let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
         tx.set("foo".to_string(), "bar".to_string());
-        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+
+        // leader commits entry but doesn't append in omnipaxos
+        let _result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
         // leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
         
         std::thread::sleep(WAIT_DECIDED_TIMEOUT * 2);
@@ -462,19 +466,34 @@ mod tests {
         let (alive_server, handler) = nodes.get(alive_servers[0]).unwrap();
 
         let new_leader_id = alive_server.lock().unwrap().omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
+        println!("first leader {:?}", leader);
         println!("new leader id {:?}", new_leader_id);
         assert_ne!(new_leader_id, leader);
         
         let (new_leader,_) = nodes.get(&new_leader_id).unwrap();
-        
+        let _:Vec<()> = nodes.iter().map(|(node_id, _)| leader_server.lock().unwrap().reconnect(*node_id)).collect();
+
+        std::thread::sleep(Duration::from_secs(2));
+
         // check that the last replicated tx of the new leader is correct
-        let last_replicated_tx = new_leader
+        let last_replicated_tx = leader_server
         .lock()
         .unwrap()
         .begin_tx(DurabilityLevel::Replicated);
+
+        let last_commited_tx = leader_server
+        .lock()
+        .unwrap()
+        .begin_tx(DurabilityLevel::Memory);
+
+        println!("last in memory {:?}", last_commited_tx.get(&"foo".to_string()));
         println!( "Last rep: {:?}", last_replicated_tx.get(&"foo".to_string()));
         assert_eq!(
             last_replicated_tx.get(&"foo".to_string()),
+            None
+        ); 
+        assert_eq!(
+            last_commited_tx.get(&"foo".to_string()),
             None
         ); 
         runtime.shutdown_background();
