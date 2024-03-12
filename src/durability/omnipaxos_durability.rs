@@ -88,7 +88,7 @@ impl DurabilityLayer for OmniPaxosDurability {
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
         let log_entry = OmniLogEntry::new(tx_offset, tx_data);
         match self.omnipaxos.append(log_entry) {
-            Ok(res) => println!("entry appended successfully! {:?}", res),
+            Ok(res) => println!("entry appended successfully!"),
             Err(e) => println!("Error in appending {:?}", e),
         };
     }

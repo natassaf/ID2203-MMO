@@ -158,12 +158,11 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         let current_idx: u64 = self.omni_paxos_durability.omnipaxos.get_decided_idx();
         if current_idx > self.latest_decided_idx {
-            println!("node_id {:?} applies replicated txns", self.node_id);
             let decided_entries= self.omni_paxos_durability.iter_starting_from_offset(TxOffset(self.latest_decided_idx));
             
             self.update_database(decided_entries);
             //if self.latest_leader != self.node_id {
-                self.latest_decided_idx = current_idx;
+            self.latest_decided_idx = current_idx;
 
    //         }
             self.advance_replicated_durability_offset();
@@ -177,7 +176,6 @@ impl Node {
                 for insert in insert_list.inserts.iter() {
                     let mut tx = self.datastore.begin_mut_tx();
                     let row = example_datastore::deserialize_example_row(&insert.0).unwrap();
-                    println!("Data appended from omnipaxos to datastore: {:?}, {:?}", row.key, row.value);
                     tx.set(row.key, row.value);
                     self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
                 }
@@ -187,15 +185,12 @@ impl Node {
                 for deleted_item in delete_list.deletes.iter() {
                     let mut tx = self.datastore.begin_mut_tx();
                     let row = example_datastore::deserialize_example_row(&deleted_item.0).unwrap();
-                    println!("Data deleted from datastore: {:?}, {:?}", row.key, row.value);
                     tx.delete(&row.key);
                     self.datastore.commit_mut_tx(tx).unwrap_or_else(|err| panic!("Error in update database commit {:?}", err));
                 }
             }
             let current_offset = self.datastore.get_cur_offset();
             let repl_offset = self.datastore.get_replicated_offset();
-            println!("datastore current offset {:?}", current_offset);
-            println!("datastore repl offset {:?}", repl_offset);
         }
     }
 
@@ -403,7 +398,7 @@ mod tests {
 
         // wait for the entries to be decided
         println!("Trasaction committed");
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
+        std::thread::sleep(Duration::from_secs(1));
         let last_replicated_tx: example_datastore::Tx = leader_server
             .lock()
             .unwrap()
@@ -412,8 +407,8 @@ mod tests {
         
         // check that the transaction was replicated in leader
         assert_eq!(
-            last_replicated_tx.get(&"red".to_string()),
-            Some("blue".to_string())
+            last_replicated_tx.get(&"foo1".to_string()),
+            Some("bar1".to_string())
         );
         leader_server.lock().unwrap().release_tx(last_replicated_tx);
 
@@ -424,8 +419,8 @@ mod tests {
 
         // check that the transaction was replicated in leader
         assert_eq!(
-            last_replicated_tx.get(&"red".to_string()),
-            Some("blue".to_string())
+            last_replicated_tx.get(&"foo1".to_string()),
+            Some("bar1".to_string())
         );
         leader_server.lock().unwrap().release_tx(last_replicated_tx);
         runtime.shutdown_background();
