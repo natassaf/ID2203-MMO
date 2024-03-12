@@ -16,6 +16,7 @@ use omnipaxos::messages::Message;
 use omnipaxos::util::NodeId;
 use omnipaxos::OmniPaxos;
 use omnipaxos_storage::memory_storage::MemoryStorage;
+use rand::Rng;
 use tokio::{sync::mpsc, time};
 
 pub const BUFFER_SIZE: usize = 10000;
@@ -43,6 +44,7 @@ impl NodeRunner {
             .omnipaxos
             .outgoing_messages();
         for msg in messages {
+
             let receiver = msg.get_receiver();
                 let channel = self
                 .outgoing
@@ -52,6 +54,17 @@ impl NodeRunner {
                 let _ = channel.send(msg).await;
             }
         }
+    }
+
+    fn random_sleep(min_millis:i32, max_millis:i32){
+    
+        // Generate a random number within the range
+        let mut rng = rand::thread_rng();
+        let random_secs = rng.gen_range(min_millis..max_millis + 1); // Add 1 to include max_secs
+    
+        let random_duration = Duration::from_millis(random_secs.try_into().unwrap());
+    
+        std::thread::sleep(random_duration);
     }
 
     pub async fn run(&mut self) {
@@ -74,6 +87,10 @@ impl NodeRunner {
                     self.node.lock().unwrap().apply_replicated_txns();
                 },
                 Some(msg) = self.incoming.recv() => {
+                    if self.node.lock().unwrap().incoming_delay_flag ==true{
+                        Self::random_sleep(50, 100);
+                    }
+                    
                     let receiver = msg.get_receiver();
                     // if !self.node.lock().unwrap().disconnected_nodes.contains(&receiver){
                     self.node.lock().unwrap().omni_paxos_durability.omnipaxos.handle_incoming(msg);
@@ -91,7 +108,8 @@ pub struct Node {
     pub datastore: ExampleDatastore,
     pub latest_decided_idx: u64,
     pub latest_leader: u64,
-    pub disconnected_nodes: Vec<NodeId>
+    pub disconnected_nodes: Vec<NodeId>,
+    pub incoming_delay_flag:bool
 }
 
 impl Node {
@@ -112,7 +130,8 @@ impl Node {
             datastore: ExampleDatastore::new(),
             latest_decided_idx:0,
             latest_leader:0,
-            disconnected_nodes:vec![]
+            disconnected_nodes:vec![],
+            incoming_delay_flag:false
         };
     }
 
@@ -320,6 +339,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_commit_transactions() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+
+        // wait for leader to be elected
+        std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
+        let (first_server, _) = nodes.get(&1).unwrap();
+
+        // get leader
+        let leader = first_server
+            .lock()
+            .unwrap()
+            .omni_paxos_durability.omnipaxos
+            .get_current_leader()
+            .expect("Failed to get leader");
+
+        let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
+       
+        // leader adds transaction
+        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
+        tx.set("foo".to_string(), "bar".to_string());
+        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+
+        // wait for the entries to be decided
+        println!("Trasaction committed");
+
+        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 16);
+        let last_replicated_tx = leader_server
+            .lock()
+            .unwrap()
+            .begin_tx(DurabilityLevel::Replicated);
+        
+        // check that the transaction was replicated in leader
+        assert_eq!(
+            last_replicated_tx.get(&"foo".to_string()),
+            Some("bar".to_string())
+        );
+        leader_server.lock().unwrap().release_tx(last_replicated_tx);
+
+        // check that the transaction was replicated in the followers
+        let follower = (leader + 1) as u64 % nodes.len() as u64;
+        let (follower_server, _) = nodes.get(&follower).unwrap();
+                let last_replicated_tx = follower_server
+            .lock()
+            .unwrap()
+            .begin_tx(DurabilityLevel::Replicated);
+        assert_eq!(
+            last_replicated_tx.get(&"foo".to_string()),
+            Some("bar".to_string())
+        );
+
+        follower_server
+            .lock()
+            .unwrap()
+            .release_tx(last_replicated_tx);
+
+        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
+        tx.set("foo1".to_string(), "bar1".to_string());
+        let result: TxResult = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+
+        // wait for the entries to be decided
+        println!("Trasaction committed");
+        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
+        let last_replicated_tx: example_datastore::Tx = leader_server
+            .lock()
+            .unwrap()
+            .begin_tx(DurabilityLevel::Replicated);
+        let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
+        
+        // check that the transaction was replicated in leader
+        assert_eq!(
+            last_replicated_tx.get(&"red".to_string()),
+            Some("blue".to_string())
+        );
+        leader_server.lock().unwrap().release_tx(last_replicated_tx);
+
+        let last_replicated_tx = follower_server
+            .lock()
+            .unwrap()
+            .begin_tx(DurabilityLevel::Replicated);
+
+        // check that the transaction was replicated in leader
+        assert_eq!(
+            last_replicated_tx.get(&"red".to_string()),
+            Some("blue".to_string())
+        );
+        leader_server.lock().unwrap().release_tx(last_replicated_tx);
+        runtime.shutdown_background();
+ 
+    }
+
+    #[tokio::test]
     async fn test_find_leader_and_commit_transaction() {
         let mut runtime = create_runtime();
         let nodes = spawn_nodes(&mut runtime);
@@ -503,7 +616,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_partial_connectivity_scenarios() {
+    async fn test_partial_connectivity_scenarios_1() {
         let mut runtime = create_runtime();
         let nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = spawn_nodes(&mut runtime);
 
@@ -579,93 +692,181 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_commit_transactions() {
+    async fn test_partial_connectivity_scenarios_2() {
         let mut runtime = create_runtime();
-        let nodes = spawn_nodes(&mut runtime);
+        let nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = spawn_nodes(&mut runtime);
+
         // wait for leader to be elected...
-        std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
+        std::thread::sleep(Duration::from_secs(1));
         let (first_server, _) = nodes.get(&1).unwrap();
 
-        // check which server is the current leader
-
-        let leader = first_server
+        let leader_id = first_server
             .lock()
             .unwrap()
             .omni_paxos_durability.omnipaxos
             .get_current_leader()
             .expect("Failed to get leader");
 
-        let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
-        //add a mutable transaction to the leader
+        let (leader_server,_ )= nodes.get(&leader_id).unwrap();
+        println!("leader_server: {:?}", leader_id);
+
+        let following_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+
+        let connected_follower_id: u64 = *following_servers[0];
+        let (connected_follower_server, _) = nodes.get(&connected_follower_id).unwrap();
+
+        let nodes_to_disconnect = {
+            let mut followers_to_disconnect: Vec<u64> = following_servers.iter().filter_map(|&server|{
+                if *server != connected_follower_id{
+                    Some(*server)
+                }
+                else{
+                    None
+                }
+            }).collect();
+            followers_to_disconnect.push(leader_id);
+            followers_to_disconnect
+        };
+        
+        let _res: Vec<()> = {
+            let mut temp_result = Vec::new();
+            for node1_id in nodes_to_disconnect.iter() {
+                let _: Vec<()> = {
+                    let mut inner_temp_result = Vec::new();
+                    for node2_id in nodes_to_disconnect.iter() {
+                        if let Some((node2, _)) = nodes.get(node2_id) {
+                            node2.lock().unwrap().disconnect(*node1_id);
+                            inner_temp_result.push(());
+                        }
+                    }
+                    inner_temp_result
+                };
+                temp_result.push(());
+            }
+            temp_result
+        };
+        
+        // wait to observe that leader doesn't change!
+        for (node_id, node_v) in nodes.iter(){
+            let (node,_) = node_v;
+            let disc = &node.lock().unwrap().disconnected_nodes;
+            println!("Node: {:?} is disconected from: {:?}", node_id, disc);
+        }
+
+        std::thread::sleep(Duration::from_secs(5));
+        let new_leader = connected_follower_server.lock()
+        .unwrap()
+        .omni_paxos_durability.omnipaxos
+        .get_current_leader()
+        .expect("Failed to get leader");
+
+        println!("leader_server: {:?}", new_leader);
+
+        assert_eq!(new_leader, connected_follower_id);
+        runtime.shutdown_background();
+
+    }
+    
+    #[tokio::test]
+    async fn test_partial_connectivity_scenarios_3() {
+        let mut runtime = create_runtime();
+        let nodes: HashMap<u64, (Arc<Mutex<Node>>, JoinHandle<()>)> = spawn_nodes(&mut runtime);
+
+        // wait for leader to be elected...
+        std::thread::sleep(Duration::from_secs(1));
+        let (first_server, _) = nodes.get(&1).unwrap();
+
+        let leader_id = first_server
+            .lock()
+            .unwrap()
+            .omni_paxos_durability.omnipaxos
+            .get_current_leader()
+            .expect("Failed to get leader");
+
+        let (leader_server,_ )= nodes.get(&leader_id).unwrap();
+        println!("leader_server: {:?}", leader_id);
+
+        // leader adds entry foo1  
         let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
-        tx.set("foo".to_string(), "bar".to_string());
+        tx.set("foo1".to_string(), "bar1".to_string());
         let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
         leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
 
-        // wait for the entries to be decided...
-        println!("Trasaction committed");
-
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 16);
-        let last_replicated_tx = leader_server
-            .lock()
-            .unwrap()
-            .begin_tx(DurabilityLevel::Replicated);
-        
-        // check that the transaction was replicated in leader
-        assert_eq!(
-            last_replicated_tx.get(&"foo".to_string()),
-            Some("bar".to_string())
-        );
-        leader_server.lock().unwrap().release_tx(last_replicated_tx);
-        // check that the transaction was replicated in the followers
-        let follower = (leader + 1) as u64 % nodes.len() as u64;
-        let (follower_server, _) = nodes.get(&follower).unwrap();
-                let last_replicated_tx = follower_server
-            .lock()
-            .unwrap()
-            .begin_tx(DurabilityLevel::Replicated);
-        assert_eq!(
-            last_replicated_tx.get(&"foo".to_string()),
-            Some("bar".to_string())
-        );
-
-        follower_server
-            .lock()
-            .unwrap()
-            .release_tx(last_replicated_tx);
-
+        // leader adds entry foo2
         let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
-        tx.set("red".to_string(), "blue".to_string());
-        let result: TxResult = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        tx.set("foo2".to_string(), "bar2".to_string());
+        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+        
+        std::thread::sleep(Duration::from_millis(1000)); // wait for leader to push transactions to omnipaxos
+
+        // leader adds entry foo3
+        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
+        tx.set("foo3".to_string(), "bar3".to_string());
+        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
+        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
+        
+        // leader adds entry foo4
+        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
+        tx.set("foo4".to_string(), "bar4".to_string());
+        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
         leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
 
-        // wait for the entries to be decided...
-        println!("Trasaction committed");
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 6);
-        let last_replicated_tx: example_datastore::Tx = leader_server
-            .lock()
-            .unwrap()
-            .begin_tx(DurabilityLevel::Replicated);
-        let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
-        
-        // check that the transaction was replicated in leader
-        assert_eq!(
-            last_replicated_tx.get(&"red".to_string()),
-            Some("blue".to_string())
-        );
-        leader_server.lock().unwrap().release_tx(last_replicated_tx);
+        //  add delay to the followers
+        let following_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+        for following_server in following_servers.iter(){
+            let (node, _) = nodes.get(&following_server).unwrap();
+            node.lock().unwrap().incoming_delay_flag=true
+        }
 
-        let last_replicated_tx = follower_server
+        std::thread::sleep(Duration::from_millis(500)); // wait for leader to push transactions to omnipaxos
+
+        for &folowers_id in following_servers.iter(){
+            leader_server.lock().unwrap().disconnect(*folowers_id);
+        }   
+
+        std::thread::sleep(Duration::from_millis(1000)); // wait for leader to push transactions to omnipaxos
+
+        //  add delay to the followers
+        let following_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+        for following_server in following_servers.iter(){
+            let (node, _) = nodes.get(&following_server).unwrap();
+            node.lock().unwrap().incoming_delay_flag=false
+        }
+        
+        for following_server_id in following_servers.iter(){
+            let (following_server, _) = nodes.get(&following_server_id).unwrap();
+            let last_replicated_tx: example_datastore::Tx = following_server
             .lock()
             .unwrap()
             .begin_tx(DurabilityLevel::Replicated);
-        // check that the transaction was replicated in leader
-        assert_eq!(
-            last_replicated_tx.get(&"red".to_string()),
-            Some("blue".to_string())
-        );
-        leader_server.lock().unwrap().release_tx(last_replicated_tx);
+            let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
+            println!("Before leader disconnected: \n Node with id: {:?} has last replicated offset: {:?} ", following_server_id, oof);
+            assert_ne!(oof.unwrap().0, 4);
+        }
+
+        std::thread::sleep(Duration::from_millis(3000));
+
+        for following_server_id in following_servers.iter(){
+            let (following_server, _) = nodes.get(&following_server_id).unwrap();
+            let last_replicated_tx: example_datastore::Tx = following_server
+            .lock()
+            .unwrap()
+            .begin_tx(DurabilityLevel::Replicated);
+            let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
+            println!("After leader disconnected: \n Node with id: {:?} has last replicated offset: {:?} ", following_server_id, oof);
+            assert_eq!(oof.unwrap().0, 4);
+        }
+        
+        let (following_server, _) = nodes.get(&following_servers[0]).unwrap();
+        let new_leader_id = following_server.lock().unwrap().omni_paxos_durability.omnipaxos.get_current_leader().unwrap();
+        println!("New leader {:?} old leader: {:?}", new_leader_id, leader_id);
+
+        assert_ne!(leader_id, new_leader_id);
+
         runtime.shutdown_background();
- 
+
     }
+
+
 }
