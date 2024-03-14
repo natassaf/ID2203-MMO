@@ -647,7 +647,6 @@ mod tests {
             temp_result
         };
         
-        // wait to observe that leader doesn't change!
         for (node_id, node_v) in nodes.iter(){
             let (node,_) = node_v;
             let disc = &node.lock().unwrap().disconnected_nodes;
@@ -722,13 +721,14 @@ mod tests {
 
         std::thread::sleep(Duration::from_millis(500)); // wait for leader to push transactions to omnipaxos
 
+        // disconnect the leader
         for &folowers_id in following_servers.iter(){
             leader_server.lock().unwrap().disconnect(*folowers_id);
         }   
 
         std::thread::sleep(Duration::from_millis(1000)); // wait for leader to push transactions to omnipaxos
 
-        //  add delay to the followers
+        //  remove delay from the followers
         let following_servers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
         for following_server in following_servers.iter(){
             let (node, _) = nodes.get(&following_server).unwrap();
