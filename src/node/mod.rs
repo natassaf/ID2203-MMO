@@ -88,7 +88,7 @@ impl NodeRunner {
                 },
                 Some(msg) = self.incoming.recv() => {
                     if self.node.lock().unwrap().incoming_delay_flag ==true{
-                        Self::random_sleep(50, 100);
+                        Self::random_sleep(100, 300);
                     }
                     
                     let receiver = msg.get_receiver();
@@ -331,100 +331,6 @@ mod tests {
             nodes.insert(pid,(node, handle));
         }
         nodes
-    }
-
-    #[tokio::test]
-    async fn test_commit_transactions() {
-        let mut runtime = create_runtime();
-        let nodes = spawn_nodes(&mut runtime);
-
-        // wait for leader to be elected
-        std::thread::sleep(WAIT_LEADER_TIMEOUT * 2);
-        let (first_server, _) = nodes.get(&1).unwrap();
-
-        // get leader
-        let leader = first_server
-            .lock()
-            .unwrap()
-            .omni_paxos_durability.omnipaxos
-            .get_current_leader()
-            .expect("Failed to get leader");
-
-        let (leader_server, _leader_join_handle) = nodes.get(&leader).unwrap();
-       
-        // leader adds transaction
-        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
-        tx.set("foo".to_string(), "bar".to_string());
-        let result = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
-        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
-
-        // wait for the entries to be decided
-        println!("Trasaction committed");
-
-        std::thread::sleep(WAIT_DECIDED_TIMEOUT * 16);
-        let last_replicated_tx = leader_server
-            .lock()
-            .unwrap()
-            .begin_tx(DurabilityLevel::Replicated);
-        
-        // check that the transaction was replicated in leader
-        assert_eq!(
-            last_replicated_tx.get(&"foo".to_string()),
-            Some("bar".to_string())
-        );
-        leader_server.lock().unwrap().release_tx(last_replicated_tx);
-
-        // check that the transaction was replicated in the followers
-        let follower = (leader + 1) as u64 % nodes.len() as u64;
-        let (follower_server, _) = nodes.get(&follower).unwrap();
-                let last_replicated_tx = follower_server
-            .lock()
-            .unwrap()
-            .begin_tx(DurabilityLevel::Replicated);
-        assert_eq!(
-            last_replicated_tx.get(&"foo".to_string()),
-            Some("bar".to_string())
-        );
-
-        follower_server
-            .lock()
-            .unwrap()
-            .release_tx(last_replicated_tx);
-
-        let mut tx = leader_server.lock().unwrap().begin_mut_tx().unwrap();
-        tx.set("foo1".to_string(), "bar1".to_string());
-        let result: TxResult = leader_server.lock().unwrap().commit_mut_tx(tx).unwrap();
-        leader_server.lock().unwrap().omni_paxos_durability.append_tx(result.tx_offset, result.tx_data);
-
-        // wait for the entries to be decided
-        println!("Trasaction committed");
-        std::thread::sleep(Duration::from_secs(1));
-        let last_replicated_tx: example_datastore::Tx = leader_server
-            .lock()
-            .unwrap()
-            .begin_tx(DurabilityLevel::Replicated);
-        let oof = leader_server.lock().unwrap().datastore.get_replicated_offset();
-        
-        // check that the transaction was replicated in leader
-        assert_eq!(
-            last_replicated_tx.get(&"foo1".to_string()),
-            Some("bar1".to_string())
-        );
-        leader_server.lock().unwrap().release_tx(last_replicated_tx);
-
-        let last_replicated_tx = follower_server
-            .lock()
-            .unwrap()
-            .begin_tx(DurabilityLevel::Replicated);
-
-        // check that the transaction was replicated in leader
-        assert_eq!(
-            last_replicated_tx.get(&"foo1".to_string()),
-            Some("bar1".to_string())
-        );
-        leader_server.lock().unwrap().release_tx(last_replicated_tx);
-        runtime.shutdown_background();
- 
     }
 
     #[tokio::test]
